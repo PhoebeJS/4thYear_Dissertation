@@ -1,0 +1,4139 @@
+---
+title: "ThesisCode_AppendixE"
+author: "Phoebe J.S. Santos"
+date: "4/6/2025"
+output: html_document
+---
+
+### Packages Used
+
+```{r}
+#install.packages("lubridate")
+library(lubridate)
+library(tidyverse) # Includes ggplot2
+
+library(lme4) # For fitting/analysing mixed models 
+library(ggeffects)
+library(ggplot2)
+library(dplyr) # For data manipulations
+# install.packages("MuMIn")
+library(MuMIn) # I.e., multi-model inference - here used for getting pseudo-r-squared. And for AICc            
+# install.packages("Matrix")
+library(Matrix)
+# install.packages("vegan")
+library(vegan) # For ordination (PCA/RDA)
+# library(MASS) 
+# install.packages("gam")
+library(gam)
+# install.packages("mgcv")
+library(mgcv)
+
+# devtools::install_github("xl0418/ggradar2",dependencies=TRUE)
+library(ggradar2)
+library(performance)
+
+library(car)
+library(lmtest)
+
+library(multifunc)
+
+library(yaImpute)
+library(modelr)
+library(gratia)
+
+library(gridExtra)
+library(grid)
+
+library(gstat)
+library(sp)
+citation("gstat")
+```
+
+
+---
+
+
+### Functions
+
+```{r}
+CI <- function(x, na.rm=FALSE) {
+  if (na.rm) x <- na.omit(x)
+  1.96*(sqrt(var(x)/length(x)))
+}
+
+SE <- function(x, na.rm=FALSE) {
+  if (na.rm) x <- na.omit(x)
+  sqrt(var(x)/length(x))
+}
+
+```
+
+
+
+# Function: Buffered LOOCV for a GAM using RMSE as metric
+Adapted from code given in https://nsojournals.onlinelibrary.wiley.com/doi/full/10.1111/ecog.02881.
+```{r}
+
+buffered_loo_gam <- function(dat, x_coord, y_coord, resp, rad, modform) {
+  # dat   = data frame with data (should contain coordinates, response, predictors)
+  # x_coord, y_coord = names of coordinate columns (as strings)
+  # resp  = name of response variable (as string)
+  # rad   = buffer radius (in same units as coordinates, e.g., degrees)
+  # modform = model formula for the GAM
+  
+  predictions <- numeric(nrow(dat))
+  
+  # Loop over each observation
+  for(i in 1:nrow(dat)) {
+    # Compute Euclidean distances from observation i to all others
+    distances <- sqrt((dat[[x_coord]] - dat[[x_coord]][i])^2 +
+                      (dat[[y_coord]] - dat[[y_coord]][i])^2)
+    # Define training set as those observations outside the buffer
+    train <- dat[distances > rad, ]
+    
+    # If not enough training data, assign NA to the prediction
+    if(nrow(train) < 5) {
+      predictions[i] <- NA
+    } else {
+      # Fit the GAM on the training data
+      model <- gam(modform, data = train, family = Gamma(link = "log"), method = "REML")
+      # Predict on the test point (i)
+      predictions[i] <- predict(model, newdata = dat[i, ], type = "response")
+    }
+  }
+  
+  # Calculate residuals and RMSE, ignoring any NA predictions
+  residuals <- dat[[resp]] - predictions
+  rmse <- sqrt(mean(residuals^2, na.rm = TRUE))
+  
+  list(predictions = predictions, residuals = residuals, RMSE = rmse)
+}
+
+```
+
+
+---
+
+## Uploading master data
+NB: This data is unavailable due to a nondisclosure agreement with the owner (Tommy Fenster) of the data. It will may be made available upon the publishing of the Fenster's PhD. 
+```{r}
+data<-read.csv("../Data/Vineyards ISVS Data sheets - Master_sheet.csv",
+               header = TRUE,
+               skip = 1)
+
+colnames(data)<-colnames(read.csv("../Data/Vineyards ISVS Data sheets - Master_sheet.csv",
+                                  header=TRUE,
+                                  na.strings="NA"))
+
+```
+
+---
+
+### Data Wrangling
+Taking the master dataset and narrowing it down to the variables of interest with regards to my research question. Emphasis on several chosen soil health indicator variables and management practices, as well as important covariates and possible influential random factors.
+
+```{r}
+# Making a calcium 0-15 average since it is an influential covariate
+data$ca_sat_0_15cm <- (data$Calcium....Sat_0.5cm + data$Calcium....Sat_5.10cm + data$Calcium....Sat_10.15cm)/3
+
+# Making a soil moisture 0-15cm average
+data$soil_moisture_0_15cm <- (data$soil_moisture_perc_0.5cm + data$soil_moisture_perc_5.10cm + data$soil_moisture_perc_10.15cm)/3
+
+# Making a bulk density average
+data$bulk_density_0_30cm <- (data$Bulk.Density..g.cm3_0.5cm + data$Bulk.Density..g.cm3_5.10cm + data$Bulk.Density..g.cm3_10.15cm + data$Bulk.Density..g.cm3_15.30cm)/4
+
+# Filtering through the master dataset
+working_data <- data %>% 
+  dplyr::select("Field.ID", "site_code", "Latitude", "Longitude", "no_syn_ferts", "no_syn_herbicides", "no_syn_or_metal_fung", "no_syn_insecticides", "organic_ammendments", "no_mech_tillage", "No_till_tractor_row", "No_till_undervine", "hedgerows", "graze_livestock", "graze_dormant", "graze_summer", "perm_ground_cover", "winter_ground_cover", "summer_ground_cover", "Years_overall_management", "Years_grazing", "Score_plus_EG","Score_traditional", "Score.Result", "Overall_management", "Organic_binary", "Total.Living.Microbial.Biomass..PLFA.ng.g", "ESM_6000_SOC.Mg.ha.1", "ESM_3000.6000_SOC.Mg.ha.1", "ESM_3000_SOC.Mg.ha.1", "ESM_1500.3000_SOC.Mg.ha.1", "ESM_1000.1500_SOC.Mg.ha.1", "ESM_500.1000_SOC.Mg.ha.1", "ESM_0.500_SOC.Mg.ha.1", "ESM_6000_TSN.Mg.ha.1", "ESM_3000.6000_TSN.Mg.ha.1", "ESM_1500.3000_TSN.Mg.ha.1", "ESM_1000.1500_TSN.Mg.ha.1", "ESM_500.1000_TSN.Mg.ha.1", "ESM_0.500_TSN.Mg.ha.1", "ca_sat_0_15cm", "X1.1.Soil.pH", "sand_farm_mean", "silt_farm_mean", "clay_farm_mean", "Functional.Group.Diversity.Index", "ESM_1500_SOC.Mg.ha.1", "Unsaturated_Soil_Conductivity_K", "Bulk.density..g.cm.3..3.tube", "Total.Aggregates...", "Macroaggregates.....0.25mm", "Microaggregates.....0.25...0.053mm", "X2nd.water.infiltration..mL.s.", "Soil.Health.Calculation", "Average...total_cover_budbreak", "Average...total_cover_veraison", "Organic.Matter", "bulk_density_0_30cm") %>% 
+  rename(FieldID = Field.ID,
+         latitude = Latitude,
+         longitude = Longitude,
+         no_till_undervine = No_till_undervine,
+         no_till_tractorrow = No_till_tractor_row,
+         years_overall_management = Years_overall_management,
+         years_grazing = Years_grazing,
+         score_plus_EG = Score_plus_EG,
+         overall_management = Overall_management,
+         organic_cert = Organic_binary,
+         microbial_biomass = Total.Living.Microbial.Biomass..PLFA.ng.g,
+         SOC_6000 = ESM_6000_SOC.Mg.ha.1,
+         SOC_3000 = ESM_3000_SOC.Mg.ha.1,
+         SOC_3000_6000 = ESM_3000.6000_SOC.Mg.ha.1,
+         SOC_1500_3000 = ESM_1500.3000_SOC.Mg.ha.1,
+         SOC_1000_1500 = ESM_1000.1500_SOC.Mg.ha.1,
+         SOC_500_1000 = ESM_500.1000_SOC.Mg.ha.1,
+         SOC_0_500 = ESM_0.500_SOC.Mg.ha.1,
+         soil_pH = X1.1.Soil.pH,
+         sand_content = sand_farm_mean,
+         silt_content = silt_farm_mean,
+         clay_content = clay_farm_mean,
+         soc_1500 = ESM_1500_SOC.Mg.ha.1,
+         function_group_diversity = Functional.Group.Diversity.Index,
+         unsaturated_soil_conductivity = Unsaturated_Soil_Conductivity_K,
+         bulk_density = bulk_density_0_30cm,
+         microaggregates_0.25_0.053mm = Microaggregates.....0.25...0.053mm,
+         macroaggregates_0.25mm = Macroaggregates.....0.25mm,
+         agg_stability = Total.Aggregates...,
+         infiltration_2nd_pour = X2nd.water.infiltration..mL.s.,
+         haney_sh = Soil.Health.Calculation,
+         soil_nitrogen = ESM_6000_TSN.Mg.ha.1,
+         TSN_3000_6000 = ESM_3000.6000_TSN.Mg.ha.1,
+         TSN_1500_3000 = ESM_1500.3000_TSN.Mg.ha.1,
+         TSN_1000_1500 = ESM_1000.1500_TSN.Mg.ha.1,
+         TSN_500_1000 = ESM_500.1000_TSN.Mg.ha.1,
+         TSN_0_500 = ESM_0.500_TSN.Mg.ha.1,
+         ca_saturation = ca_sat_0_15cm
+  )
+
+working_data$unsaturated_soil_conductivity [working_data$unsaturated_soil_conductivity < 0 ]<-NA #Turning negative values in unsaturated soil conductivity column into NA values; not 0's as that will affect averaging
+
+```
+
+
+Averaging across every 4 rows to deal with issue of replicates & to look at the data on the farm level rather than transect.
+```{r}
+data.farm <- working_data %>%
+  mutate_if(is.character, factor) %>%
+  group_by(FieldID, organic_cert, Score.Result, overall_management) %>%
+  summarise_if(is.numeric, list( mean = mean,  CI= CI, SE= SE ), na.rm = TRUE)
+
+```
+
+
+#### Need to add perm ground cover to regen-matrix score
+For a farm to get a point for perm ground cover, there needs to be greater than 50% per ground cover at budbreak & veraison sampling
+```{r}
+# Replace NAs in organic_ammendments_mean to 0's 
+data.farm <- data.farm %>% mutate(organic_ammendments_mean = replace_na(organic_ammendments_mean, 0))
+
+data.farm$perm_ground_cover_mean[data.farm$Average...total_cover_budbreak_mean >=50 & data.farm$Average...total_cover_veraison_mean>=50 ]<-1
+
+data.farm$perm_ground_cover_mean[data.farm$Average...total_cover_budbreak_mean < 50 | data.farm$Average...total_cover_veraison_mean<50]<-0
+
+
+data.farm$perm_ground_cover_mean
+
+data.farm$organic_ammendments_mean
+
+#Since averaging data collected for refco, silletto, and paicines over first two years. Make any tillage in that time a zero
+data.farm$no_mech_tillage_mean [data.farm$no_mech_tillage_mean <1]<-0
+
+#Re adding the regen-conv matrix categories
+data.farm$Score_traditional_mean<-(data.farm$no_syn_ferts_mean + data.farm$no_syn_herbicides_mean + data.farm$no_syn_or_metal_fung_mean + data.farm$no_syn_insecticides_mean + data.farm$organic_ammendments_mean + data.farm$no_mech_tillage_mean + data.farm$hedgerows_mean + data.farm$graze_livestock_mean +data.farm$perm_ground_cover_mean )
+    
+data.farm$Score_traditional_mean
+
+#Designating any scores >+5 as regenerative and Conventional <5 
+data.farm$Score.Result[data.farm$Score_traditional_mean>=5]<-"Regenerative"
+
+data.farm$Score.Result[data.farm$Score_traditional_mean<5]<-"Conventional"
+
+
+
+table(data.farm$organic_cert)
+
+```
+
+
+---
+
+## Soil Health MultiFunc Variable
+
+NB: Adjusting the sign for bulk density as it may be skewing the overall SH variables
+```{r}
+data.farm <- data.farm %>% ungroup()
+
+
+# Preparing data via normalising variables for SH score
+soil_data2 <- data.farm %>%
+  mutate(across(c(FieldID, SOC_3000_mean, microbial_biomass_mean, bulk_density_mean), ~ replace_na(., 0)))
+
+soil_data2 <- soil_data2 %>% 
+  select(FieldID, SOC_3000_mean, microbial_biomass_mean, bulk_density_mean) %>%
+  mutate(
+    SOC_3000_mean = SOC_3000_mean / max(SOC_3000_mean, na.rm = TRUE),
+    microbial_biomass_mean = microbial_biomass_mean / max(microbial_biomass_mean, na.rm = TRUE),
+    bulk_density_mean = -1 * (bulk_density_mean / max(bulk_density_mean, na.rm = TRUE)) + 1 # Multiply by -1 inverts the scale, so higher values become lower. Add 1 Shifts the range back to [0, 1] (since the inversion would otherwise make the range [0, -1]).
+  )
+  
+
+# Calculate mean and standardized functions
+soil_data2 <- soil_data2 %>%
+  cbind(getStdAndMeanFunctions(soil_data2, c("SOC_3000_mean", "microbial_biomass_mean", "bulk_density_mean")))
+
+# Calculate effective number of functions
+soil_data2 <- soil_data2 %>%
+  getFuncsMaxed(c("SOC_3000_mean", "microbial_biomass_mean", "bulk_density_mean"), threshmin = 0.8, threshmax = 0.8) # Unsure if these thresholds should be changed - it's what was set in the example code for the package
+
+# Adjust for correlation between variables
+D <- cor_dist(soil_data2 %>% select(SOC_3000_mean, microbial_biomass_mean, bulk_density_mean)) # might need to adjust; ex code maybe seems like it should be the variables std being used 
+tau <- dmean(soil_data2 %>% select(SOC_3000_mean, microbial_biomass_mean, bulk_density_mean), D)
+soil_data2 <- soil_data2 %>%
+  mutate(
+    mf_eff_1_cor = getMF_eff(., c("SOC_3000_mean", "microbial_biomass_mean", "bulk_density_mean"), q = 1, D = D, tau = tau),
+    mf_eff_2_cor = getMF_eff(., c("SOC_3000_mean", "microbial_biomass_mean", "bulk_density_mean"), q = 2, D = D, tau = tau)
+  )
+
+# What changed by flipping the sign for bulk density: 
+# No more NA's in mf_eff_1_cor (except for 1) - when I didn't sign switch original there were many
+# Not much change in meanFunction
+# Both mf_eff_1_cor and mf_eff_2_cor are higher (not dramatically so but many are 1-2 units higher)
+
+### Will use this dataset with these variables
+
+```
+
+
+Combining the soil data frame with data.farm
+```{r}
+combined_data <- data.farm %>%
+  left_join(soil_data2, by = "FieldID")
+
+# Checking  resulting data frame
+ head(combined_data)
+
+```
+
+
+---
+
+# Note on workflow
+The workflow is roughly as follows: variables are selected from the literature as possible covariates, and through AIC model selection, the GAM is built up/cut down. Then CV is used for both model parameterisation & for predictive capability. 
+
+To identify a reasonable k dimension, the random CV was run with fx=TRUE (i.e., with unpenalised smooths) specified so that the direct impact of different k settings on model performance could be clearly observed.
+
+Subsequently, a spatially buffered leave-one-out cross-validation (LOOCV) was performed to account for spatial autocorrelation identified in the data via a semivariogram analysis. In this phase, the optimal k value from the previous CV was applied, but fx=TRUE was removed to allow the model to employ REML for automatic penalisation. Note that method="REML" was used in all GAMs, which is particularly important for AIC comparisons because it incorporates a penalty for model complexity into the likelihood estimation, thereby ensuring fair and robust model selection.
+
+---
+
+## Assessing Spatial Autocorrelation
+```{r}
+
+# Strength of spatial effect
+gam_model <- gam(SOC_3000_mean ~ s(longitude_mean, latitude_mean, bs = "ds"), data = data.farm, method = "REML")
+summary(gam_model)
+#NB: EDF is ~9.5 signalling decently high spatial variability
+
+gam_model2 <- gam(microbial_biomass_mean ~ s(longitude_mean, latitude_mean, bs = "ds"), data = data.farm, method = "REML")
+summary(gam_model2) # EDF ~4.334
+
+gam_model3 <- gam(bulk_density_mean ~ s(longitude_mean, latitude_mean, bs = "ds"), data = data.farm, method = "REML")
+summary(gam_model3) # EDF ~11.87
+
+# SEmiovariogram to measure how similar points are over increasing distances
+library(gstat)
+library(sp)
+
+# Convert data to a spatial object (if not already)
+coordinates(data.farm) <- ~longitude_mean+latitude_mean
+
+# Compute semivariogram
+variogram_model <- variogram(SOC_3000_mean ~ 1, data.farm)
+
+# Plot semivariogram
+plot(variogram_model)
+
+# Fit a theoretical model (to find range)
+variogram_fit <- fit.variogram(variogram_model, model = vgm("Sph"))
+print(variogram_fit)
+# Based on this: spatial autocorrelation is effectively present up to about 1.23 units of distance. Beyond this, observations are essentially uncorrelated
+# If using spatial blocking, anything from 1.5 to 2 units to ensure independence between training and test sets
+
+####### Unable to run for microbial biomass... possibly because strength of spatial effect was low? Will select buffer size more arbitrarily (With a bit of range to get a better picture) and note lesser presence of spatial effect
+
+variogram_model2 <- variogram(bulk_density_mean ~ 1, data.farm)
+variogram_fit <- fit.variogram(variogram_model2, model = vgm("Sph"))
+print(variogram_fit) 
+# Based on this: spatial autocorrelation is effectively present up to about 2.85 units of distance. Beyond this, observations are essentially uncorrelated
+
+
+```
+
+---
+
+# GAMs
+
+## SOC & Cont Regen Score
+```{r}
+
+data.farm$agg_stability_mean[is.nan(data.farm$agg_stability_mean)] <- 0
+
+GAM_soc_regen_score_1 <- gam(SOC_3000_mean~Score_traditional_mean + s(clay_content_mean) + s(silt_content_mean) + s(ca_sat_0_15cm_mean) + s(agg_stability_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_score_1) # R-sq.(adj) =  0.661   Deviance explained = 72.6%
+
+GAM_soc_regen_score_2 <- gam(SOC_3000_mean~Score_traditional_mean + s(clay_content_mean) + s(silt_content_mean) + s(ca_sat_0_15cm_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_score_2) # R-sq.(adj) =  0.667   Deviance explained = 71.7%
+
+GAM_soc_regen_score_3 <- gam(SOC_3000_mean~Score_traditional_mean + s(clay_content_mean) + s(ca_sat_0_15cm_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_score_3) # R-sq.(adj) =  0.663   Deviance explained = 69.9%
+
+GAM_soc_regen_score_4 <- gam(SOC_3000_mean~Score_traditional_mean + s(clay_content_mean) + s(ca_sat_0_15cm_mean) + s(agg_stability_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_score_4) # R-sq.(adj) =  0.657   Deviance explained = 72.2%
+
+GAM_soc_regen_score_5 <- gam(SOC_3000_mean~Score_traditional_mean + s(clay_content_mean) + s(agg_stability_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_score_5) # R-sq.(adj) =  0.596   Deviance explained = 69.1%
+
+GAM_soc_regen_score_6 <- gam(SOC_3000_mean~Score_traditional_mean + s(clay_content_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_score_6) # R-sq.(adj) =  0.622   Deviance explained = 67.2%
+
+AIC(GAM_soc_regen_score_1,
+    GAM_soc_regen_score_2,
+    GAM_soc_regen_score_3,
+    GAM_soc_regen_score_4,# Lowest AIC; comoparable across all models though
+    GAM_soc_regen_score_5, 
+    GAM_soc_regen_score_6)
+
+# Going with model 6 because it is comparable with all other models and doesn't have added complexity of lots of covariates
+GAM_soc_regen_score_6 <- gam(SOC_3000_mean~Score_traditional_mean + s(clay_content_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_score_6)
+gam.check(GAM_soc_regen_score_6)
+plot.gam(GAM_soc_regen_score_6)
+
+#Normality check
+GAM_soc_regen_score_6_resid <- resid(GAM_soc_regen_score_6)
+shapiro.test(GAM_soc_regen_score_6_resid) # W = 0.95665, p-value = 0.069; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_soc_regen_score_6)
+print(bp_test) # BP = 0.68197, df = 2, p-value = 0.7111; suggests homogeneity
+
+```
+
+
+### Random CV for parameterisation
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_clay, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(SOC_3000_mean ~ Score_traditional_mean + 
+                                    s(clay_content_mean, k = k_clay, fx = TRUE),
+                                  data = .x, 
+                                  family = Gamma(link = "log"))),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$SOC_3000_mean - .y)^2))),
+      
+      #  Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$SOC_3000_mean - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_clay = c(5, 10, 15),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_clay),
+                        ~ perform_cv(..1, data.farm)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) 
+
+
+```
+
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- SOC_3000_mean ~ Score_traditional_mean + s(clay_content_mean, k = 5)
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(1.25, 1.4, 1.5)
+
+# Container for LOOCV results
+loo_results <- list()
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = data.farm,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "SOC_3000_mean",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+loo_results
+#NB: Buffer of 1 degree RMSE is relatively comparable with spatial k-fold CV RMSE outcome when k=5 (i.e., both ~10)
+# Bit more info explaining what a 'buffer of 1 degree' is:
+  # With a 1‑unit buffer, the training data are even more distant from the test point. This forces the model to extrapolate further from the information it has, which results in the highest RMSE among these three settings. This higher error can be considered a more honest reflection of the model's performance on new, spatially independent data
+
+
+GAM_soc_regen_score_6_cv <- gam(SOC_3000_mean~Score_traditional_mean + s(clay_content_mean, k=5), family = Gamma(link = "log"), data = data.farm, method="REML")
+summary(GAM_soc_regen_score_6_cv)
+# Key findings:
+# Score_traditional_mean is positively associated with SOC_3000_mean (est = 0.04409, p = 0.0045), indicating that higher traditional management scores correspond to increased SOC levels.
+# The smooth term for clay content is highly significant (p < 0.001, edf = 2.84), suggesting a nonlinear relationship with SOC.
+
+# Model performance:
+# Adjusted R² = 0.621, Deviance explained = 66.6% → Moderate to strong model fit.
+# The scale estimate (0.045913) and REML score (175.72) indicate a reasonable model fit.
+
+# Ecological Interpretation:
+# Traditional management practices appear to contribute positively to SOC levels.
+# Clay content is an important factor influencing SOC, with a nonlinear effect.
+
+
+gam.check(GAM_soc_regen_score_6_cv)
+plot.gam(GAM_soc_regen_score_6_cv)
+
+#Normality check
+GAM_soc_regen_score_6_cv_resid <- resid(GAM_soc_regen_score_6_cv)
+shapiro.test(GAM_soc_regen_score_6_cv_resid) # W = 0.95857, p-value = 0.08276; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_soc_regen_score_6_cv)
+print(bp_test) # BP = 0.68197, df = 2, p-value = 0.7111; suggests homogeneity
+
+```
+
+
+### Attempting visualisation
+```{r}
+
+GAM_soc_regen_score_6_cv <- gam(SOC_3000_mean~Score_traditional_mean + s(clay_content_mean, k=5), family = Gamma(link = "log"), data = data.farm, method="REML")
+summary(GAM_soc_regen_score_6_cv)
+
+draw(GAM_soc_regen_score_6_cv, residuals = TRUE, scales = "fixed")
+
+ds <- data_slice(GAM_soc_regen_score_6_cv,
+                 Score_traditional_mean = evenly(Score_traditional_mean, n = 100),
+                 clay_content_mean = mean(data.farm$clay_content_mean)
+)
+ds
+
+fv1 <- fitted_values(GAM_soc_regen_score_6_cv, data = ds, scale = "response")
+fv1
+
+fv1 |>
+  ggplot(aes(x = Score_traditional_mean, y = .fitted)) +
+  geom_point(
+    data = data.farm,
+    aes(y = SOC_3000_mean),
+    alpha = 0.8, colour = "steelblue"
+  ) +
+  geom_ribbon(aes(ymin = .lower_ci, ymax = .upper_ci), alpha = 0.2) +
+  geom_line() +
+  labs(
+    x = "Continuous Regen Score",
+    y = "Predicted SOC (3000 mm depth)",
+    title = "Estimated SOC as a function of Regen Matrix Score",
+    subtitle = paste("Holding clay content constant at", round(mean(data.farm$clay_content_mean), 2))
+  )
+# Clay content is held constant at its mean value (approximately X%) to isolate the effect of traditional management score on SOC, meaning predictions assume a typical soil texture rather than varying across different clay levels
+```
+
+
+Alternate view with clay allowed to exert influence
+```{r}
+ds_interactive <- data_slice(GAM_soc_regen_score_6_cv,
+                             Score_traditional_mean = evenly(Score_traditional_mean, n = 100),
+                             clay_content_mean = evenly(clay_content_mean, n = 3))  # Varying clay content
+
+fv2 <- fitted_values(GAM_soc_regen_score_6_cv, data = ds_interactive, scale = "response")
+unique(fv2$clay_content_mean)
+citation("gratia")
+
+gam_visual_regen_soc <- fv2 |>
+  ggplot(aes(x = Score_traditional_mean, y = .fitted, color = factor(clay_content_mean), group = clay_content_mean)) +
+  geom_jitter(data = data.farm, 
+              mapping = aes(x = Score_traditional_mean, y = SOC_3000_mean),
+              color = "black", alpha = 0.6, width = 0.2, height = 0,
+              inherit.aes = FALSE) +  # Darker, jittered points
+  geom_ribbon(aes(ymin = .lower_ci, ymax = .upper_ci, fill = factor(clay_content_mean)), 
+              alpha = 0.1, show.legend = FALSE) +  # Remove redundant legend
+  geom_line(size = 1) +  # Thicker lines for clarity
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Continuous Regen Score",
+    y = expression("Predicted SOC - 3000mm depth"~(Mg~ha^-1)),
+    color = "Clay Content (%)",
+    linetype = "Clay Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "right"
+  )
+gam_visual_regen_soc
+
+ggsave(gam_visual_regen_soc, 
+       filename = "gam_visual_regen_cont_soc",
+       device = "pdf",
+       height = 6, width = 10, units = "in")
+```
+
+
+---
+
+### SOC & Binary Regen
+
+```{r}
+GAM_soc_regen_conv_1 <- gam(SOC_3000_mean~Score.Result + s(clay_content_mean) + s(silt_content_mean) + s(ca_saturation) + s(agg_stability_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_conv_1) # R-sq.(adj) =  0.611   Deviance explained = 68.5%
+
+GAM_soc_regen_conv_2 <- gam(SOC_3000_mean~Score.Result + s(clay_content_mean) + s(silt_content_mean) + s(ca_saturation), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_conv_2) # R-sq.(adj) =  0.629   Deviance explained = 68.7%
+
+GAM_soc_regen_conv_3 <- gam(SOC_3000_mean~Score.Result + s(clay_content_mean) + s(ca_saturation), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_conv_3) # R-sq.(adj) =  0.627   Deviance explained = 66.9%
+
+GAM_soc_regen_conv_4 <- gam(SOC_3000_mean~Score.Result + s(clay_content_mean) + s(ca_saturation) + s(agg_stability_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_conv_4) # R-sq.(adj) =  0.611   Deviance explained = 68.1%
+
+GAM_soc_regen_conv_5 <- gam(SOC_3000_mean~Score.Result + s(clay_content_mean) + s(agg_stability_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_conv_5) # R-sq.(adj) =  0.566   Deviance explained = 65.4%
+
+GAM_soc_regen_conv_6 <- gam(SOC_3000_mean~Score.Result + s(clay_content_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_conv_6) # R-sq.(adj) =  0.591   Deviance explained = 64.1%
+
+
+AIC(GAM_soc_regen_conv_1,
+    GAM_soc_regen_conv_2,
+    GAM_soc_regen_conv_3, # Lowest AIC but comparable across all models
+    GAM_soc_regen_conv_4,
+    GAM_soc_regen_conv_5, 
+    GAM_soc_regen_conv_6)
+
+
+# Going with model 6 because it is comparable with all other models and doesn't have added complexity of lots of covariates
+GAM_soc_regen_conv_6 <- gam(SOC_3000_mean~Score.Result + s(clay_content_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_regen_conv_6)
+gam.check(GAM_soc_regen_conv_6)
+plot.gam(GAM_soc_regen_conv_6)
+
+#Normality check
+GAM_soc_regen_conv_6_resid <- resid(GAM_soc_regen_conv_6)
+shapiro.test(GAM_soc_regen_conv_6_resid) # W = 0.97252, p-value = 0.3043; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_soc_regen_conv_6)
+print(bp_test) # BP = 3.0664, df = 2, p-value = 0.2158; suggests homogeneity
+
+```
+
+
+### Random CV for parameterisation
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_clay, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(SOC_3000_mean ~ Score.Result + 
+                                    s(clay_content_mean, k = k_clay, fx = TRUE),
+                                  data = .x, 
+                                  family = Gamma(link = "log"))),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$SOC_3000_mean - .y)^2))),
+      
+      # Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$SOC_3000_mean - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_clay = c(5, 10, 15),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_clay),
+                        ~ perform_cv(..1, data.farm)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) 
+
+
+```
+
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- SOC_3000_mean ~ Score.Result + s(clay_content_mean, k = 5)
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(1.25, 1.4, 1.5)
+
+# Container for LOOCV results
+loo_results <- list()
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = data.farm,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "SOC_3000_mean",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+loo_results
+
+GAM_soc_regen_conv_6_cv <- gam(SOC_3000_mean~Score.Result + s(clay_content_mean, k=5), family = Gamma(link = "log"), data = data.farm, method="REML")
+summary(GAM_soc_regen_conv_6_cv)
+# Key findings:
+# Regenerative management (Score.Result) is positively associated with SOC_3000_mean (est = 0.14015, p = 0.054), though the effect is marginally significant.
+# The smooth term for clay content is highly significant (p < 0.001, edf = 2.621), indicating a nonlinear relationship with SOC.
+
+# Model performance:
+# Adjusted R² = 0.588, Deviance explained = 63.2% → Moderate model fit.
+# The scale estimate (0.049898) and REML score (176.01) suggest a reasonable model fit.
+
+# Ecological Interpretation:
+# There is some evidence that regenerative management practices may lead to higher SOC levels, though the effect is not strongly significant.
+# Clay content remains an important factor influencing SOC, with a nonlinear effect.
+
+
+gam.check(GAM_soc_regen_conv_6_cv)
+plot.gam(GAM_soc_regen_conv_6_cv)
+
+#Normality check
+GAM_soc_regen_conv_6_cv_resid <- resid(GAM_soc_regen_conv_6_cv)
+shapiro.test(GAM_soc_regen_conv_6_cv_resid) # W = 0.97132, p-value = 0.2732; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_soc_regen_conv_6_cv)
+print(bp_test) # BP = 3.0664, df = 2, p-value = 0.2158; suggests homogeneity
+```
+
+
+### Visualisation
+```{r}
+draw(GAM_soc_regen_conv_6_cv, residuals = TRUE, scales = "fixed")
+
+ds_cat <- data_slice(GAM_soc_regen_conv_6_cv,
+  Score.Result = unique(data.farm$Score.Result),      
+  clay_content_mean = evenly(clay_content_mean, n = 3))       
+
+
+fv_cat <- fitted_values(GAM_soc_regen_conv_6_cv, data = ds_cat, scale = "response")
+
+
+gam_visual_regen_conv_SOC <- 
+  ggplot(fv_cat, aes(x = Score.Result, y = .fitted, group = as.factor(clay_content_mean), color = as.factor(clay_content_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = data.farm, 
+              aes(x = Score.Result, y = SOC_3000_mean), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Binary Regen Index",
+    y = expression("Predicted SOC - 3000mm depth"~(Mg~ha^-1)),
+    color = "Clay Content (%)",
+    linetype = "Clay Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "none"
+  )
+
+gam_visual_regen_conv_SOC
+
+```
+
+
+---
+
+
+## SOC & Organic Classification 
+```{r}
+GAM_soc_org_conv_1 <- gam(SOC_3000_mean~organic_cert + s(clay_content_mean) + s(silt_content_mean) + s(ca_sat_0_15cm_mean) + s(agg_stability_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_org_conv_1) # R-sq.(adj) =  0.601   Deviance explained = 67.8%
+
+GAM_soc_org_conv_2 <- gam(SOC_3000_mean~organic_cert + s(clay_content_mean) + s(silt_content_mean) + s(ca_sat_0_15cm_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_org_conv_2) # R-sq.(adj) =  0.616   Deviance explained = 67.6%
+
+GAM_soc_org_conv_3 <- gam(SOC_3000_mean~organic_cert + s(clay_content_mean) + s(ca_sat_0_15cm_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_org_conv_3) # R-sq.(adj) =  0.611   Deviance explained = 65.4%
+
+GAM_soc_org_conv_4 <- gam(SOC_3000_mean~organic_cert + s(clay_content_mean) + s(ca_sat_0_15cm_mean) + s(agg_stability_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_org_conv_4) # R-sq.(adj) =  0.601   Deviance explained = 67.5%
+
+GAM_soc_org_conv_5 <- gam(SOC_3000_mean~organic_cert + s(clay_content_mean) + s(agg_stability_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_org_conv_5) # R-sq.(adj) =  0.532   Deviance explained = 63.4%
+
+GAM_soc_org_conv_6 <- gam(SOC_3000_mean~organic_cert + s(clay_content_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_org_conv_6) # R-sq.(adj) =  0.561   Deviance explained = 61.7%
+
+AIC(GAM_soc_org_conv_1,
+    GAM_soc_org_conv_2, # Lowest AIC but comparable across models
+    GAM_soc_org_conv_3,
+    GAM_soc_org_conv_4,
+    GAM_soc_org_conv_5, 
+    GAM_soc_org_conv_6)
+
+GAM_soc_org_conv_6 <- gam(SOC_3000_mean~organic_cert + s(clay_content_mean), family = Gamma(link = "log"), data = data.farm)
+summary(GAM_soc_org_conv_6)
+gam.check(GAM_soc_org_conv_6)
+plot.gam(GAM_soc_org_conv_6)
+
+#Normality check
+GAM_soc_org_conv_6_resid <- resid(GAM_soc_org_conv_6)
+shapiro.test(GAM_soc_org_conv_6_resid) # W = 0.96741, p-value = 0.1905; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_soc_org_conv_6)
+print(bp_test) # BP = 3.8073, df = 2, p-value = 0.149; suggests homogeneity
+
+```
+
+
+### Random CV for parameterisation
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_clay, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(SOC_3000_mean ~ organic_cert + 
+                                    s(clay_content_mean, k = k_clay, fx = TRUE),
+                                  data = .x, 
+                                  family = Gamma(link = "log"))),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$SOC_3000_mean - .y)^2))),
+      
+      #  Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      #  Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$SOC_3000_mean - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_clay = c(5, 10, 15),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_clay),
+                        ~ perform_cv(..1, data.farm)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) # K parameter of 5 has lowest CV RMSE & smallest gap with train RMSE
+
+
+```
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- SOC_3000_mean ~ organic_cert + s(clay_content_mean, k = 5)
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(1.25, 1.4, 1.5)
+
+# Container for LOOCV results
+loo_results <- list()
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = data.farm,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "SOC_3000_mean",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+loo_results
+
+GAM_soc_org_conv_6_cv <- gam(SOC_3000_mean~organic_cert + s(clay_content_mean, k=5), family = Gamma(link = "log"), data = data.farm, method="REML")
+summary(GAM_soc_org_conv_6_cv)
+plot(GAM_soc_org_conv_6_cv, pages = 1)
+# Key findings:
+# Organic certification not significantly associated with SOC_3000_mean (est = 0.05130, p = 0.475), suggesting no strong evidence that organic farms have higher SOC levels in this dataset.
+# The smooth term for clay content is highly significant (p < 0.001, edf = 2.706), indicating a nonlinear relationship with SOC.
+
+# Model performance:
+# Adjusted R² = 0.559, Deviance explained = 61% → Moderate model fit.
+# The scale estimate (0.050965) and REML score (177.58) suggest a reasonable model fit.
+
+# Ecological Interpretation:
+# Organic certification does not appear to be a key driver of SOC levels in this dataset.
+# Clay content remains a significant factor influencing SOC, with a nonlinear effect.
+
+
+gam.check(GAM_soc_org_conv_6_cv)
+plot.gam(GAM_soc_org_conv_6_cv)
+
+#Normality check
+GAM_soc_org_conv_6_cv_resid <- resid(GAM_soc_org_conv_6_cv)
+shapiro.test(GAM_soc_org_conv_6_cv_resid) # W = 0.96716, p-value = 0.1862; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_soc_org_conv_6_cv)
+print(bp_test) # BP = 3.8073, df = 2, p-value = 0.149; suggests homogeneity
+```
+
+
+### Visual
+```{r}
+
+GAM_soc_org_conv_6_cv <- gam(SOC_3000_mean~organic_cert + s(clay_content_mean, k=5), family = Gamma(link = "log"), data = data.farm, method="REML")
+
+ds_cat <- data_slice(GAM_soc_org_conv_6_cv,
+  organic_cert = unique(data.farm$organic_cert),      
+  clay_content_mean = evenly(clay_content_mean, n = 3))       
+
+
+fv_cat <- fitted_values(GAM_soc_org_conv_6_cv, data = ds_cat, scale = "response")
+
+
+gam_visual_org_SOC <- ggplot(fv_cat, aes(x = organic_cert, y = .fitted, group = as.factor(clay_content_mean), color = as.factor(clay_content_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = data.farm, 
+              aes(x = organic_cert, y = SOC_3000_mean), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Organic Classification",
+    y = expression("Predicted SOC - 3000mm depth"~(Mg~ha^-1)),
+    color = "Clay Content (%)",
+    linetype = "Clay Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "right"
+  )
+
+gam_visual_org_SOC
+
+```
+
+
+Combining binary regen visual with organic visual
+```{r}
+#install.packages("lemon")
+library(lemon)
+
+combined_plot <- grid_arrange_shared_legend(gam_visual_regen_conv_SOC, gam_visual_org_SOC, ncol = 2, position = "bottom")
+# Save it
+ggsave(combined_plot, 
+       filename = "gam_regen_org_SOC_plot_comparison",
+       device = "pdf",
+       height = 6, width = 11, units = "in")
+```
+
+---
+
+#### SOC Model comparison
+```{r}
+AIC(GAM_soc_org_conv_6_cv,
+    GAM_soc_regen_conv_6_cv,
+    GAM_soc_regen_score_6_cv)
+
+```
+
+---
+
+
+## Microbial Biomass & continuous regen score
+```{r}
+
+GAM_microbial_biomass_regen_1 <- gam(microbial_biomass_mean~Score_traditional_mean + s(soil_pH_mean) + s(silt_content_mean) + s(clay_content_mean) + s(SOC_3000_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_1) # R-sq.(adj) =  0.406   Deviance explained = 49.8%
+
+GAM_microbial_biomass_regen_2 <- gam(microbial_biomass_mean~Score_traditional_mean + s(soil_pH_mean) + s(silt_content_mean) + s(SOC_3000_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_2) # R-sq.(adj) =  0.382   Deviance explained = 47.9%
+
+GAM_microbial_biomass_regen_3 <- gam(microbial_biomass_mean~Score_traditional_mean + s(silt_content_mean) + s(SOC_3000_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_3) # R-sq.(adj) =  0.381   Deviance explained = 48.1%
+
+GAM_microbial_biomass_regen_4 <- gam(microbial_biomass_mean~Score_traditional_mean + s(soil_pH_mean) + s(silt_content_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_4) # R-sq.(adj) =  0.345   Deviance explained = 43.4%
+
+GAM_microbial_biomass_regen_5 <- gam(microbial_biomass_mean~Score_traditional_mean + s(soil_pH_mean) + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_5) # R-sq.(adj) =  0.335   Deviance explained = 37.9%
+
+GAM_microbial_biomass_regen_6 <- gam(microbial_biomass_mean~Score_traditional_mean + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_6) #R-sq.(adj) =  0.254   Deviance explained = 30.7%
+
+AIC(GAM_microbial_biomass_regen_1,
+    GAM_microbial_biomass_regen_2, #Model 2 barely has lowest AIC but is comparable to both model 1 and model 3
+    GAM_microbial_biomass_regen_3,
+    GAM_microbial_biomass_regen_4,
+    GAM_microbial_biomass_regen_5,
+    GAM_microbial_biomass_regen_6) 
+
+# Going with model 5 as that was my original combo of variables 
+GAM_microbial_biomass_regen_5 <- gam(microbial_biomass_mean~Score_traditional_mean + s(soil_pH_mean) + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_5)
+
+#Normality check
+GAM_microbial_biomass_regen_5_resid <- resid(GAM_microbial_biomass_regen_5)
+shapiro.test(GAM_microbial_biomass_regen_5_resid) # W = 0.97349, p-value = 0.3314; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_microbial_biomass_regen_5)
+print(bp_test) # BP = 4.5918, df = 3, p-value = 0.2042; suggests possible homogeneity
+```
+
+
+### Random CV
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_pH, k_silt, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(microbial_biomass_mean ~ Score_traditional_mean + 
+                                    s(soil_pH_mean, k = k_pH, fx = TRUE) +
+                                    s(silt_content_mean, k = k_silt, fx=TRUE),
+                                  data = .x, 
+                                  family = Gamma(link = "log"))),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$microbial_biomass_mean - .y)^2))),
+      
+      # Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$microbial_biomass_mean - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_pH = c(3, 6, 9),
+  k_silt = c(3, 6, 9),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_pH, k_silt),
+                        ~ perform_cv(..1, ..2, data.farm)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) # K parameter of 6 & 3 has lowest CV RMSE & smallest gap with train RMSE
+
+
+```
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- microbial_biomass_mean ~ Score_traditional_mean + soil_pH_mean + silt_content_mean
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(0.5, 0.75, 1)
+
+# Container for LOOCV results
+loo_results <- list()
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = data.farm,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "microbial_biomass_mean",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+loo_results
+
+GAM_microbial_biomass_regen_5_cv <- gam(microbial_biomass_mean~Score_traditional_mean + s(soil_pH_mean, k=6) + s(silt_content_mean, k=3), family = Gamma(link = "log"), data=data.farm, method="REML")
+summary (GAM_microbial_biomass_regen_5_cv)
+# Key findings:
+# Score_traditional_mean positively associated with microbial_biomass_mean (est = 0.06768, p = 0.0156), suggesting that higher traditional management scores correspond to increased microbial biomass.
+# The smooth term for soil pH is significant (p = 0.01952, edf = 1), indicating a linear effect on microbial biomass.
+# The smooth term for silt content is highly significant (p = 0.00133, edf = 1), also showing a linear relationship with microbial biomass.
+
+# Model performance:
+# Adjusted R² = 0.335, Deviance explained = 37.9% → Relatively weak model fit.
+# The scale estimate (0.15985) and REML score (420.77) suggest a less precise fit.
+
+# Ecological Interpretation:
+# Traditional management practices appear to support higher microbial biomass.
+# Soil pH and silt content both significantly influence microbial biomass, though their effects are linear rather than nonlinear.
+# Additional factors may be important in explaining microbial biomass variation.
+
+
+# EDF of 1 indicates linear relationship between covaraites & response - so smooth terms could be removed
+GAM_microbial_biomass_regen_5_cv_2 <- gam(microbial_biomass_mean~Score_traditional_mean + soil_pH_mean + silt_content_mean, family = Gamma(link = "log"), data=data.farm, method="REML")
+summary (GAM_microbial_biomass_regen_5_cv_2)
+# Key findings:
+# Score_traditional_mean positively associated with microbial_biomass_mean (est = 0.06767, p = 0.01563), suggesting that higher traditional management scores correspond to increased microbial biomass.
+# Soil pH is positively associated with microbial biomass (est = 0.45489, p = 0.01950)
+# Silt content is also positively associated with microbial biomass (est = 0.03693, p = 0.00133)
+
+# Model performance:
+# Adjusted R² = 0.335, Deviance explained = 37.9% → Relatively weak model fit.
+# The scale estimate (0.15985) and REML score (421.43) suggest a less precise fit.
+
+# Ecological Interpretation:
+# Traditional management practices appear to support higher microbial biomass.
+# Soil pH and silt content both significantly influence microbial biomass.
+# Additional factors may be important in explaining microbial biomass variation.
+
+
+
+#Normality check
+GAM_microbial_biomass_regen_5_cv_2_resid <- resid(GAM_microbial_biomass_regen_5_cv_2)
+shapiro.test(GAM_microbial_biomass_regen_5_cv_2_resid) # W = 0.97349, p-value = 0.3314; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_microbial_biomass_regen_5_cv)
+print(bp_test) # BP = 4.5918, df = 3, p-value = 0.2042; suggests possible homogeneity
+
+```
+
+
+# Visualisation
+```{r}
+
+GAM_microbial_biomass_regen_5_cv_2 <- gam(microbial_biomass_mean~Score_traditional_mean + soil_pH_mean + silt_content_mean, family = Gamma(link = "log"), data=data.farm, method="REML")
+
+
+ds <- data_slice(GAM_microbial_biomass_regen_5_cv_2,
+                 Score_traditional_mean = evenly(Score_traditional_mean, n = 100)
+)
+ds
+
+fv1 <- fitted_values(GAM_microbial_biomass_regen_5_cv_2, data = ds, scale = "response")
+fv1
+
+fv1 |>
+  ggplot(aes(x = Score_traditional_mean, y = .fitted)) +
+  geom_point(
+    data = data.farm,
+    aes(y = microbial_biomass_mean),
+    alpha = 0.8, colour = "steelblue"
+  ) +
+  geom_ribbon(aes(ymin = .lower_ci, ymax = .upper_ci), alpha = 0.2) +
+  geom_line() +
+  labs(
+    x = "Continuous Regen Score",
+    y = "Predicted Microbial Biomass (units)",
+    title = "Estimated Microbial Biomass as a function of Continuous Regen Score"
+  )
+
+
+```
+
+
+Alternative graph
+```{r}
+GAM_microbial_biomass_regen_5_cv_2 <- gam(microbial_biomass_mean~Score_traditional_mean + soil_pH_mean + silt_content_mean, family = Gamma(link = "log"), data=data.farm, method="REML")
+
+typical_silt <- median(data.farm$silt_content_mean, na.rm = TRUE)
+
+ds_pH <- data_slice(
+  GAM_microbial_biomass_regen_5_cv_2,
+  Score_traditional_mean = evenly(Score_traditional_mean, n = 100),
+  soil_pH_mean = evenly(soil_pH_mean, n = 3),  # e.g., 3 levels of pH
+  silt_content_mean = typical_silt
+)
+
+fv_pH <- fitted_values(
+  GAM_microbial_biomass_regen_5_cv_2,
+  data = ds_pH,
+  scale = "response"
+)
+
+gam_visual_MB_hold_silt <- fv_pH |>
+  ggplot(aes(
+    x = Score_traditional_mean,
+    y = .fitted,
+    color = factor(soil_pH_mean),
+    group = soil_pH_mean
+  )) +
+  # Observed data points (black jittered points)
+  geom_jitter(
+    data = data.farm,
+    mapping = aes(x = Score_traditional_mean, y = microbial_biomass_mean),
+    color = "black", alpha = 0.6, width = 0.2, height = 0,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(
+    aes(ymin = .lower_ci, ymax = .upper_ci, fill = factor(soil_pH_mean)),
+    alpha = 0.1,
+    show.legend = FALSE
+  ) +
+  geom_line(size = 1.2) +
+  # Adjust colors/fills
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Continuous Regen Score",
+    y = expression("Predicted Microbial Biomass"~(ng~g^-1)),
+    color = "Soil pH"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+
+gam_visual_MB_hold_silt
+# Holding silt content at 29.62
+
+
+ggsave(gam_visual_MB_hold_silt, 
+       filename = "gam_visual_MB_hold_silt",
+       device = "pdf",
+       height = 6, width = 10, units = "in")
+
+```
+
+Companion for alt graph
+```{r}
+
+typical_pH <- median(data.farm$soil_pH_mean, na.rm = TRUE)
+
+ds_silt <- data_slice(
+  GAM_microbial_biomass_regen_5_cv_2,
+  Score_traditional_mean = evenly(Score_traditional_mean, n = 100),
+  silt_content_mean = evenly(silt_content_mean, n = 3),  # 3 levels of silt
+  soil_pH_mean = typical_pH
+)
+
+fv_silt <- fitted_values(
+  GAM_microbial_biomass_regen_5_cv_2,
+  data = ds_silt,
+  scale = "response"
+)
+
+gam_visual_MB_hold_pH <- fv_silt |>
+  ggplot(aes(
+    x = Score_traditional_mean,
+    y = .fitted,
+    color = factor(silt_content_mean),
+    group = silt_content_mean
+  )) +
+  # Observed data points ( black jittered points)
+  geom_jitter(
+    data = data.farm,
+    mapping = aes(x = Score_traditional_mean, y = microbial_biomass_mean),
+    color = "black", alpha = 0.6, width = 0.2, height = 0,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(
+    aes(ymin = .lower_ci, ymax = .upper_ci, fill = factor(silt_content_mean)),
+    alpha = 0.1,
+    show.legend = FALSE
+  ) +
+  geom_line(size = 1.2) +
+  # Adjust colors/fills
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Continuous Regen Score",
+    y = expression("Predicted Microbial Biomass"~(ng~g^-1)),
+    color = "Silt Content (%)"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  ) # Holds soil pH at 7.18
+gam_visual_MB_hold_pH
+
+ggsave(gam_visual_MB_hold_pH, 
+       filename = "gam_visual_MB_hold_pH",
+       device = "pdf",
+       height = 6, width = 10, units = "in")
+
+combined_plot <- grid.arrange(gam_visual_MB_hold_silt, gam_visual_MB_hold_pH, ncol = 2)
+
+# Save it
+ggsave(combined_plot, 
+       filename = "gam_MB_plot_comparison",
+       device = "pdf",
+       height = 6, width = 11, units = "in")
+
+```
+
+
+---
+
+## Microbial biomass and binary regen
+```{r}
+GAM_microbial_biomass_regen_conv_1 <- gam(microbial_biomass_mean~Score.Result + s(soil_pH_mean) + s(silt_content_mean) + s(clay_content_mean) + s(SOC_3000_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_conv_1) # R-sq.(adj) =  0.394   Deviance explained = 49.3%
+
+GAM_microbial_biomass_regen_conv_2 <- gam(microbial_biomass_mean~Score.Result + s(soil_pH_mean) + s(silt_content_mean) + s(SOC_3000_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_conv_2) #R-sq.(adj) =  0.366   Deviance explained = 46.9%
+
+GAM_microbial_biomass_regen_conv_3 <- gam(microbial_biomass_mean~Score.Result + s(silt_content_mean) + s(SOC_3000_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_conv_3) # R-sq.(adj) =  0.364   Deviance explained =   47%
+
+GAM_microbial_biomass_regen_conv_4 <- gam(microbial_biomass_mean~Score.Result + s(soil_pH_mean) + s(silt_content_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_conv_4) # R-sq.(adj) =  0.309   Deviance explained = 40.3%
+
+GAM_microbial_biomass_regen_conv_5 <- gam(microbial_biomass_mean~Score.Result + s(soil_pH_mean) + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_conv_5) # R-sq.(adj) =  0.295   Deviance explained =   32%
+
+GAM_microbial_biomass_regen_conv_6 <- gam(microbial_biomass_mean~Score.Result + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_conv_6) #R-sq.(adj) =  0.204   Deviance explained = 22.2%
+
+AIC(GAM_microbial_biomass_regen_conv_1,
+    GAM_microbial_biomass_regen_conv_2, #Model 2 barely has lowest AIC but is comparable to both model 1 and model 3
+    GAM_microbial_biomass_regen_conv_3,
+    GAM_microbial_biomass_regen_conv_4,
+    GAM_microbial_biomass_regen_conv_5,
+    GAM_microbial_biomass_regen_conv_6) 
+
+GAM_microbial_biomass_regen_conv_5 <- gam(microbial_biomass_mean~Score.Result + s(soil_pH_mean) + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_regen_conv_5)
+
+#Normality check
+GAM_microbial_biomass_regen_conv_5_resid <- resid(GAM_microbial_biomass_regen_conv_5)
+shapiro.test(GAM_microbial_biomass_regen_conv_5_resid) # W = 0.9704, p-value = 0.2512; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_microbial_biomass_regen_conv_5)
+print(bp_test) # BP = 3.0719, df = 3, p-value = 0.3807; suggests possible homogeneity
+
+```
+
+
+### Random CV for parameterisation
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_pH, k_silt, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(microbial_biomass_mean ~ Score.Result + 
+                                    s(soil_pH_mean, k = k_pH, fx = TRUE) +
+                                    s(silt_content_mean, k = k_silt, fx=TRUE),
+                                  data = .x, 
+                                  family = Gamma(link = "log"))),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$microbial_biomass_mean - .y)^2))),
+      
+      # Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$microbial_biomass_mean - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_pH = c(3, 6, 9),
+  k_silt = c(3, 6, 9),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_pH, k_silt),
+                        ~ perform_cv(..1, ..2, data.farm)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) # K parameter of 6 & 3 has lowest CV RMSE & smallest gap with train RMSE
+
+
+```
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- microbial_biomass_mean ~ Score.Result + soil_pH_mean + silt_content_mean
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(0.5, 0.75, 1)
+
+# Container for LOOCV results
+loo_results <- list()
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = data.farm,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "microbial_biomass_mean",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+loo_results
+
+GAM_microbial_biomass_regen_conv_5_cv <- gam(microbial_biomass_mean~Score.Result + s(soil_pH_mean, k=6) + s(silt_content_mean, k=3), family = Gamma(link = "log"), data=data.farm, method="REML")
+summary (GAM_microbial_biomass_regen_conv_5_cv)
+plot(GAM_microbial_biomass_regen_5_cv, pages = 1)
+# Key findings:
+# Regenerative management (Score.Result) not significantly associated with microbial_biomass_mean (est = 0.14623, p = 0.291).
+# The smooth term for soil pH is significant (p = 0.00653, edf = 1), indicating a linear effect on microbial biomass.
+# The smooth term for silt content is also highly significant (p = 0.00181, edf = 1), showing a linear relationship with microbial biomass.
+
+# Model performance:
+# Adjusted R² = 0.295, Deviance explained = 32% → Weak model fit.
+# The scale estimate (0.17863) and REML score (421.27) suggest a less precise fit.
+
+# Ecological Interpretation:
+# Regenerative management does not appear to strongly influence microbial biomass in this dataset.
+# Soil pH and silt content are significant factors affecting microbial biomass, but their effects are linear rather than nonlinear.
+# Additional variables may be important in explaining microbial biomass variation.
+
+
+
+# EDF of 1 indicates that the covariates have a lienar relationship , meaning that they could be removed from the model
+GAM_microbial_biomass_regen_conv_5_cv_2 <- gam(microbial_biomass_mean~Score.Result + soil_pH_mean + silt_content_mean, family = Gamma(link = "log"), data=data.farm, method="REML")
+summary (GAM_microbial_biomass_regen_conv_5_cv_2) # Model summary/overall outcome is very similar
+# Key findings:
+# Score.Result (Regenerative vs. Conventional) is not statistically significant (p = 0.291), suggesting no clear difference in microbial biomass between these management approaches.
+# Soil pH is positively associated with microbial biomass (est = 0.56694, p = 0.00653), indicating higher microbial biomass at higher pH levels.
+# Silt content is also positively associated with microbial biomass (est = 0.03863, p = 0.00181), suggesting that soils with higher silt content support greater microbial biomass.
+
+# Model performance:
+# Adjusted R² = 0.295, Deviance explained = 32% → Modest model fit.
+# The REML score (421.94) and scale estimate (0.17862) indicate the model is reasonable but with room for improvement.
+
+# Ecological Interpretation:
+# Soil properties (pH and silt content) are key drivers of microbial biomass, with higher pH and silt content favoring microbial abundance.
+# The lack of a significant effect of regenerative management suggests that soil microbial biomass may be more influenced by inherent soil characteristics than by management practices alone.
+
+
+
+#Normality check
+GAM_microbial_biomass_regen_conv_5_cv_resid <- resid(GAM_microbial_biomass_regen_conv_5_cv)
+shapiro.test(GAM_microbial_biomass_regen_conv_5_cv_resid) # W = 0.9704, p-value = 0.2512; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_microbial_biomass_regen_conv_5)
+print(bp_test) # BP = 3.0719, df = 3, p-value = 0.3807; suggests possible homogeneity
+
+```
+
+
+### Visual
+```{r}
+
+typical_pH <- median(data.farm$soil_pH_mean, na.rm = TRUE)
+typical_pH
+ds_silt <- data_slice(
+  GAM_microbial_biomass_regen_conv_5_cv_2,
+  Score.Result = unique(data.farm$Score.Result),
+  silt_content_mean = evenly(silt_content_mean, n = 3),  # 3 levels of silt
+  soil_pH_mean = typical_pH
+)
+
+fv_org <- fitted_values(GAM_microbial_biomass_regen_conv_5_cv_2, data = ds_silt, scale = "response")
+     
+
+gam_visual_regen_conv_MB_hold_pH <- ggplot(fv_org, aes(x = Score.Result, y = .fitted, group = as.factor(silt_content_mean), color = as.factor(silt_content_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = data.farm, 
+              aes(x = Score.Result, y = microbial_biomass_mean), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Binary Regen Index",
+    y = expression("Predicted Microbial Biomass"~(ng~g^-1)),
+    color = "Silt Content (%)",
+    linetype = "Silt Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+
+gam_visual_regen_conv_MB_hold_pH
+
+##########
+
+typical_silt <- median(data.farm$silt_content_mean, na.rm = TRUE)
+typical_silt
+ds_pH <- data_slice(
+  GAM_microbial_biomass_regen_conv_5_cv_2,
+  Score.Result = unique(data.farm$Score.Result),
+  soil_pH_mean = evenly(soil_pH_mean, n = 3),  # e.g., 3 levels of pH
+  silt_content_mean = typical_silt
+)
+
+fv_org <- fitted_values(GAM_microbial_biomass_regen_conv_5_cv_2, data = ds_pH, scale = "response")
+
+gam_visual_regen_conv_MB_hold_silt <- ggplot(fv_org, aes(x = Score.Result, y = .fitted, group = as.factor(soil_pH_mean), color = as.factor(soil_pH_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = data.farm, 
+              aes(x = Score.Result, y = microbial_biomass_mean), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Binary Regen Index",
+    y = expression("Predicted Microbial Biomass"~(ng~g^-1)),
+    color = "Soil pH",
+    linetype = "Soil pH"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+   legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+
+gam_visual_regen_conv_MB_hold_silt
+
+
+combined_plot <- grid.arrange(gam_visual_regen_conv_MB_hold_pH, gam_visual_regen_conv_MB_hold_silt, ncol = 2)
+
+# Save it
+ggsave(combined_plot, 
+       filename = "gam_regen_MB_plot_comparison",
+       device = "pdf",
+       height = 6, width = 11, units = "in")
+
+```
+
+---
+
+## Microbial biomass & organic cert
+```{r}
+
+GAM_microbial_biomass_org_conv_1 <- gam(microbial_biomass_mean~organic_cert + s(soil_pH_mean) + s(silt_content_mean) + s(clay_content_mean) + s(SOC_3000_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_org_conv_1) # R-sq.(adj) =  0.396   Deviance explained = 49.7%
+
+GAM_microbial_biomass_org_conv_2 <- gam(microbial_biomass_mean~organic_cert + s(soil_pH_mean) + s(silt_content_mean) + s(SOC_3000_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_org_conv_2) #R-sq.(adj) =  0.367   Deviance explained = 47.1%
+
+GAM_microbial_biomass_org_conv_3 <- gam(microbial_biomass_mean~organic_cert + s(silt_content_mean) + s(SOC_3000_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_org_conv_3) # R-sq.(adj) =  0.365   Deviance explained = 47.3%
+
+GAM_microbial_biomass_org_conv_4 <- gam(microbial_biomass_mean~organic_cert + s(soil_pH_mean) + s(silt_content_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_org_conv_4) # R-sq.(adj) =  0.298   Deviance explained = 40.1%
+
+GAM_microbial_biomass_org_conv_5 <- gam(microbial_biomass_mean~organic_cert + s(soil_pH_mean) + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_org_conv_5) # R-sq.(adj) =   0.27   Deviance explained = 30.9%
+
+GAM_microbial_biomass_org_conv_6 <- gam(microbial_biomass_mean~organic_cert + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_org_conv_6) #R-sq.(adj) =  0.124   Deviance explained = 15.2%
+
+AIC(GAM_microbial_biomass_org_conv_1,
+    GAM_microbial_biomass_org_conv_2, #Model 2 and 1 have equivalent AIC; both are comparable to model 3, i.e., no significant difference
+    GAM_microbial_biomass_org_conv_3,
+    GAM_microbial_biomass_org_conv_4,
+    GAM_microbial_biomass_org_conv_5,
+    GAM_microbial_biomass_org_conv_6)
+
+
+GAM_microbial_biomass_org_conv_5 <- gam(microbial_biomass_mean~organic_cert + s(soil_pH_mean) + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary (GAM_microbial_biomass_org_conv_5)
+
+#Normality check
+GAM_microbial_biomass_org_conv_5_resid <- resid(GAM_microbial_biomass_org_conv_5)
+shapiro.test(GAM_microbial_biomass_org_conv_5_resid) # W = 0.96805, p-value = 0.2022; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_microbial_biomass_org_conv_5)
+print(bp_test) # BP = 3.9833, df = 3, p-value = 0.2633; suggests homogeneity
+
+```
+
+
+### Random CV for parameterisation
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_pH, k_silt, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(microbial_biomass_mean ~ organic_cert + 
+                                    s(soil_pH_mean, k = k_pH, fx = TRUE) +
+                                    s(silt_content_mean, k = k_silt, fx=TRUE),
+                                  data = .x, 
+                                  family = Gamma(link = "log"))),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$microbial_biomass_mean - .y)^2))),
+      
+      # Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$microbial_biomass_mean - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_pH = c(3, 6, 9),
+  k_silt = c(3, 6, 9),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_pH, k_silt),
+                        ~ perform_cv(..1, ..2, data.farm)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) # K parameter of 6 & 3 has lowest CV RMSE & smallest gap with train RMSE
+
+
+```
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- microbial_biomass_mean ~ organic_cert + soil_pH_mean + silt_content_mean
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(0.5, 0.75, 1)
+
+# Container for LOOCV results
+loo_results <- list()
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = data.farm,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "microbial_biomass_mean",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+loo_results
+
+
+GAM_microbial_biomass_org_conv_5_cv <- gam(microbial_biomass_mean~organic_cert + s(soil_pH_mean, k=6) + s(silt_content_mean, k=3), family = Gamma(link = "log"), data=data.farm, method="REML")
+summary (GAM_microbial_biomass_org_conv_5_cv)
+
+GAM_microbial_biomass_org_conv_5_cv_2 <- gam(microbial_biomass_mean~organic_cert + soil_pH_mean + silt_content_mean, family = Gamma(link = "log"), data=data.farm, method="REML")
+summary (GAM_microbial_biomass_org_conv_5_cv_2)
+# Key findings:
+# organic_cert (Organic vs. Conventional) is not statistically significant (p = organic_cert), suggesting no clear difference in microbial biomass between management approaches.
+# Soil pH is positively associated with microbial biomass (est = 0.64733, p = 0.001013)
+# Silt content is also positively associated with microbial biomass (est = 0.04159, p = 0.000557)
+
+# Model performance:
+# Adjusted R² = 0.27, Deviance explained = 30.9% → Modest model fit.
+# The REML score (422.45) and scale estimate (0.17657) indicate the model is reasonable but with room for improvement.
+
+# Ecological Interpretation:
+# Soil properties (pH and silt content) are key drivers of microbial biomass, with higher pH and silt content favoring microbial abundance.
+# The lack of a significant effect of regenerative management suggests that soil microbial biomass may be more influenced by inherent soil characteristics than by management practices alone.
+
+
+#Normality check
+GAM_microbial_biomass_org_conv_5_cv_resid <- resid(GAM_microbial_biomass_org_conv_5_cv)
+shapiro.test(GAM_microbial_biomass_org_conv_5_cv_resid) # W = 0.96805, p-value = 0.2022; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_microbial_biomass_org_conv_5_cv)
+print(bp_test) # BP = 3.9833, df = 3, p-value = 0.2633; suggests homogeneity
+
+```
+
+
+Visual
+```{r}
+
+GAM_microbial_biomass_org_conv_5_cv_2 <- gam(microbial_biomass_mean~organic_cert + soil_pH_mean + silt_content_mean, family = Gamma(link = "log"), data=data.farm, method="REML")
+
+typical_pH <- median(data.farm$soil_pH_mean, na.rm = TRUE)
+
+ds_silt <- data_slice(
+  GAM_microbial_biomass_org_conv_5_cv_2,
+  organic_cert = unique(data.farm$organic_cert),
+  silt_content_mean = evenly(silt_content_mean, n = 3),  # 3 levels of silt
+  soil_pH_mean = typical_pH
+)
+
+fv_org <- fitted_values(GAM_microbial_biomass_org_conv_5_cv_2, data = ds_silt, scale = "response")
+     
+gam_visual_org_MB_hold_pH <- ggplot(fv_org, aes(x = organic_cert, y = .fitted, group = as.factor(silt_content_mean), color = as.factor(silt_content_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = data.farm, 
+              aes(x = organic_cert, y = microbial_biomass_mean), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Organic Classification",
+    y = expression("Predicted Microbial Biomass"~(ng~g^-1)),
+    color = "Silt Content (%)",
+    linetype = "Silt Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+
+gam_visual_org_MB_hold_pH
+
+##########
+
+typical_silt <- median(data.farm$silt_content_mean, na.rm = TRUE)
+
+ds_pH <- data_slice(
+  GAM_microbial_biomass_org_conv_5_cv_2,
+  organic_cert = unique(data.farm$organic_cert),
+  soil_pH_mean = evenly(soil_pH_mean, n = 3),  
+  silt_content_mean = typical_silt
+)
+
+fv_org <- fitted_values(GAM_microbial_biomass_org_conv_5_cv_2, data = ds_pH, scale = "response")
+
+gam_visual_org_MB_hold_silt <- ggplot(fv_org, aes(x = organic_cert, y = .fitted, group = as.factor(soil_pH_mean), color = as.factor(soil_pH_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = data.farm, 
+              aes(x = organic_cert, y = microbial_biomass_mean), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Organic Classification",
+    y = expression("Predicted Microbial Biomass"~(ng~g^-1)),
+    color = "Soil pH",
+    linetype = "Soil pH"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+   legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+
+gam_visual_org_MB_hold_silt
+
+
+combined_plot <- grid.arrange(gam_visual_org_MB_hold_pH, gam_visual_org_MB_hold_silt, ncol = 2)
+
+ggsave(combined_plot, 
+       filename = "gam_org_MB_plot_comparison",
+       device = "pdf",
+       height = 6, width = 11, units = "in")
+
+```
+
+
+---
+
+#### GAM Microbial Biomass Comparison
+```{r}
+AIC(GAM_microbial_biomass_regen_5_cv_2,
+    GAM_microbial_biomass_regen_conv_5_cv_2,
+    GAM_microbial_biomass_org_conv_5_cv_2)
+
+
+```
+
+
+---
+
+## Bulk density & cont regen score
+```{r}
+
+GAM_bulk_density_regen_1 <- gam(bulk_density_mean~Score_traditional_mean + s(agg_stability_mean) + s(silt_content_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_1) # R-sq.(adj) =  0.517   Deviance explained = 57.8%
+
+GAM_bulk_density_regen_2 <- gam(bulk_density_mean~Score_traditional_mean +  s(silt_content_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_2) # R-sq.(adj) =  0.488   Deviance explained = 51.6%
+
+GAM_bulk_density_regen_3 <- gam(bulk_density_mean~Score_traditional_mean + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_3) #R-sq.(adj) =  0.486   Deviance explained =   51%
+
+GAM_bulk_density_regen_4 <- gam(bulk_density_mean~Score_traditional_mean + s(agg_stability_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_4) # R-sq.(adj) =  0.531   Deviance explained = 57.6%
+
+GAM_bulk_density_regen_5 <- gam(bulk_density_mean~Score_traditional_mean + s(agg_stability_mean) + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_5) # R-sq.(adj) =  0.261   Deviance explained = 30.7%
+
+GAM_bulk_density_regen_6 <- gam(bulk_density_mean~Score_traditional_mean + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_6) # R-sq.(adj) =  0.165   Deviance explained = 19.2%
+
+AIC(GAM_bulk_density_regen_1,
+    GAM_bulk_density_regen_2,
+    GAM_bulk_density_regen_3, # Model 3 has lowest AIC but is comparable/not significantly different than model 2
+    GAM_bulk_density_regen_4,
+    GAM_bulk_density_regen_5,
+    GAM_bulk_density_regen_6)
+
+# Going with model 3 because if silt really isn't doing that much then it's only adding unnecessary complexity
+
+GAM_bulk_density_regen_3 <- gam(bulk_density_mean~Score_traditional_mean + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_3)
+
+#Normality check
+GAM_bulk_density_regen_3_resid <- resid(GAM_bulk_density_regen_3)
+shapiro.test(GAM_bulk_density_regen_3_resid) # W = 0.94827, p-value = 0.03145; suggests possible non-normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_bulk_density_regen_3)
+print(bp_test) # BP = 1.4825, df = 2, p-value = 0.4765; suggests homogeneity
+
+```
+
+### Random CV for hyper-parameterisation
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_clay, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(bulk_density_mean ~ Score_traditional_mean + 
+                                    s(clay_content_mean, k = k_clay, fx = TRUE) ,
+                                  data = .x, 
+                                  family = Gamma(link = "log"))),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$bulk_density_mean - .y)^2))),
+      
+      # (Optional) Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      # (Optional) Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$bulk_density_mean - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_clay = c(5, 10, 15),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_clay),
+                        ~ perform_cv(..1, data.farm)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) # K parameter of 5 has lowest CV RMSE & smallest gap with train RMSE
+
+
+```
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- bulk_density_mean ~ Score_traditional_mean + s(clay_content_mean, k = 5) 
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(2.6, 2.7, 2.8)
+
+# Container for LOOCV results
+loo_results <- list()
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = data.farm,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "bulk_density_mean",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+loo_results
+
+
+GAM_bulk_density_regen_3_cv <- gam(bulk_density_mean~Score_traditional_mean + s(clay_content_mean, k=5), family = Gamma(link = "log"), data=data.farm, method="REML")
+summary(GAM_bulk_density_regen_3_cv)
+plot(GAM_bulk_density_regen_3_cv, pages = 1)
+# Key findings:
+# Regenerative score (Score_traditional_mean) is not significantly associated with bulk_density_mean (est = -0.010813, p = 0.171026), suggesting no strong evidence that regenerative score influence BD in this dataset.
+# The smooth term for clay content is significant (p = 1.17e-06, edf = 1.216), indicating a slightly nonlinear effect on BD.
+
+# Model performance:
+# Adjusted R² = 0.485, Deviance explained = 50.9% 
+# The scale estimate (0.015335) and REML score (-36.07).
+
+# Ecological Interpretation:
+# Regenerative score does not appear to strongly influence BD in this dataset.
+# Clay content are significant factors affecting BD, with marginally non-linear effect.
+# Additional variables may be important in explaining BD variation.
+
+
+#Normality check
+GAM_bulk_density_regen_3_cv_resid <- resid(GAM_bulk_density_regen_3_cv)
+shapiro.test(GAM_bulk_density_regen_3_cv_resid) # W = 0.94836, p-value = 0.0317; suggests possible non-normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_bulk_density_regen_3_cv)
+print(bp_test) # BP = 1.4825, df = 2, p-value = 0.4765; suggests homogeneity
+
+```
+
+
+### Visual
+```{r}
+GAM_bulk_density_regen_3_cv <- gam(bulk_density_mean~Score_traditional_mean + s(clay_content_mean, k=5), family = Gamma(link = "log"), data=data.farm, method="REML")
+
+all_coef <- coef(GAM_bulk_density_regen_3_cv)
+all_se <- sqrt(diag(vcov(GAM_bulk_density_regen_3_cv)))
+# identify parametric terms (they come first and don't start with "s(" or "ti(" etc.)
+parametric_terms <- names(summary(GAM_bulk_density_regen_3_cv)$p.coeff)
+
+# subset to just those terms
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
+
+ds_interactive <- data_slice(GAM_bulk_density_regen_3_cv,
+                             Score_traditional_mean = evenly(Score_traditional_mean, n = 100),
+                             clay_content_mean = evenly(clay_content_mean, n = 3))  # Varying clay content
+
+fv2 <- fitted_values(GAM_bulk_density_regen_3_cv, data = ds_interactive, scale = "response")
+
+
+gam_visual_regen_BD <- fv2 |>
+  ggplot(aes(x = Score_traditional_mean, y = .fitted, color = factor(clay_content_mean), group = clay_content_mean)) +
+  geom_jitter(data = data.farm, 
+              mapping = aes(x = Score_traditional_mean, y = bulk_density_mean),
+              color = "black", alpha = 0.6, width = 0.2, height = 0,
+              inherit.aes = FALSE) +  # Darker, jittered points
+  geom_ribbon(aes(ymin = .lower_ci, ymax = .upper_ci, fill = factor(clay_content_mean)), 
+              alpha = 0.1, show.legend = FALSE) +  # Remove redundant legend
+  geom_line(size = 1) +  # Thicker lines for clarity
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Continuous Regen Score",
+    y = expression("Bulk Density"~(g~cm^-3)),
+    color = "Clay Content (%)",
+    linetype = "Clay Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "right"
+  )
+gam_visual_regen_BD
+
+ggsave(gam_visual_regen_BD, 
+       filename = "gam_visual_regen_BD",
+       device = "pdf",
+       height = 6, width = 10, units = "in")
+
+
+```
+
+
+---
+
+## Bulk density & binary regen
+```{r}
+
+GAM_bulk_density_regen_conv_1 <- gam(bulk_density_mean~Score.Result + s(agg_stability_mean) + s(silt_content_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_conv_1) # R-sq.(adj) =  0.512   Deviance explained = 57.1%
+
+GAM_bulk_density_regen_conv_2 <- gam(bulk_density_mean~Score.Result +  s(silt_content_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_conv_2) # R-sq.(adj) =  0.482   Deviance explained =   51%
+
+GAM_bulk_density_regen_conv_3 <- gam(bulk_density_mean~Score.Result + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_conv_3) #R-sq.(adj) =  0.483   Deviance explained = 50.5%
+
+GAM_bulk_density_regen_conv_4 <- gam(bulk_density_mean~Score.Result + s(agg_stability_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_conv_4) # R-sq.(adj) =  0.524   Deviance explained = 56.7%
+
+GAM_bulk_density_regen_conv_5 <- gam(bulk_density_mean~Score.Result + s(agg_stability_mean) + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_conv_5) # R-sq.(adj) =  0.199   Deviance explained =   25%
+
+GAM_bulk_density_regen_conv_6 <- gam(bulk_density_mean~Score.Result + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_conv_6) # R-sq.(adj) =  0.119   Deviance explained = 14.9%
+
+AIC(GAM_bulk_density_regen_conv_1,
+    GAM_bulk_density_regen_conv_2,
+    GAM_bulk_density_regen_conv_3, # Model 3 has lowest AIC but is comparable/not significantly different than model 2
+    GAM_bulk_density_regen_conv_4,
+    GAM_bulk_density_regen_conv_5,
+    GAM_bulk_density_regen_conv_6)
+
+GAM_bulk_density_regen_conv_3 <- gam(bulk_density_mean~Score.Result + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_regen_conv_3)
+
+#Normality check
+GAM_bulk_density_regen_conv_3_resid <- resid(GAM_bulk_density_regen_conv_3)
+shapiro.test(GAM_bulk_density_regen_conv_3_resid) # W = 0.94795, p-value = 0.03054; suggests possible non-normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_bulk_density_regen_conv_3)
+print(bp_test) # BP = 1.9643, df = 2, p-value = 0.3745; suggests homogeneity
+
+```
+
+### Random CV for parameterisation
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_clay, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(bulk_density_mean ~ Score.Result + 
+                                    s(clay_content_mean, k = k_clay, fx = TRUE) ,
+                                  data = .x, 
+                                  family = Gamma(link = "log"))),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$bulk_density_mean - .y)^2))),
+      
+      # (Optional) Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      # (Optional) Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$bulk_density_mean - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_clay = c(5, 10, 15),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_clay),
+                        ~ perform_cv(..1, data.farm)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) # K parameter of 5 has lowest CV RMSE & smallest gap with train RMSE
+
+
+```
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- bulk_density_mean ~ Score.Result + s(clay_content_mean, k = 5) 
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(2.6, 2.7, 2.8)
+
+# Container for LOOCV results
+loo_results <- list()
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = data.farm,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "bulk_density_mean",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+loo_results
+
+
+GAM_bulk_density_regen_conv_3_cv <- gam(bulk_density_mean~Score.Result + s(clay_content_mean, k=5), family = Gamma(link = "log"), data=data.farm, method="REML")
+summary(GAM_bulk_density_regen_conv_3_cv)
+plot(GAM_bulk_density_regen_conv_3_cv, pages=1)
+# Key findings:
+# Regenerative management (Score.Result) is not significantly associated with bulk_density_mean (est = -0.03691, p = 0.328), suggesting no strong evidence that regenerative management influence BD in this dataset.
+# The smooth term for clay content is significant (p = 1.73e-06, edf = 1.284), indicating a slightly nonlinear effect on BD.
+
+# Model performance:
+# Adjusted R² = 0.483, Deviance explained = 50.4% 
+# The scale estimate (.015639) and REML score (-37.217).
+
+# Ecological Interpretation:
+# Regenerative management does not appear to strongly influence BD in this dataset.
+# Clay content are significant factors affecting BD, with marginally non-linear effect.
+# Additional variables may be important in explaining BD variation.
+
+#Normality check
+GAM_bulk_density_regen_conv_3_cv_resid <- resid(GAM_bulk_density_regen_conv_3_cv)
+shapiro.test(GAM_bulk_density_regen_conv_3_cv_resid) # W = 0.94806, p-value = 0.03084; suggests possible non-normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_bulk_density_regen_conv_3_cv)
+print(bp_test) # BP = 1.9643, df = 2, p-value = 0.3745; suggests homogeneity
+```
+
+### Visual
+```{r}
+
+GAM_bulk_density_regen_conv_3_cv <- gam(bulk_density_mean~Score.Result + s(clay_content_mean, k=5), family = Gamma(link = "log"), data=data.farm, method="REML")
+
+ds_cat <- data_slice(GAM_bulk_density_regen_conv_3_cv,
+  Score.Result = unique(data.farm$Score.Result),      
+  clay_content_mean = evenly(clay_content_mean, n = 3))       
+
+
+fv_cat <- fitted_values(GAM_bulk_density_regen_conv_3_cv, data = ds_cat, scale = "response")
+
+
+gam_visual_regen_conv_BD <- ggplot(fv_cat, aes(x = Score.Result, y = .fitted, group = as.factor(clay_content_mean), color = as.factor(clay_content_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = data.farm, 
+              aes(x = Score.Result, y = bulk_density_mean), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Binary Regen Score",
+    y = expression("Predicted Bulk Density"~(g~cm^-3)),
+    color = "Clay Content (%)",
+    linetype = "Clay Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "right"
+  )
+
+gam_visual_regen_conv_BD
+
+
+```
+
+
+---
+
+
+## BD & organic cert
+```{r}
+
+GAM_bulk_density_org_conv_1 <- gam(bulk_density_mean~organic_cert + s(agg_stability_mean) + s(silt_content_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_org_conv_1) # R-sq.(adj) =  0.506   Deviance explained = 56.8%
+
+GAM_bulk_density_org_conv_2 <- gam(bulk_density_mean~organic_cert +  s(silt_content_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_org_conv_2) # R-sq.(adj) =  0.475   Deviance explained = 51.2%
+
+GAM_bulk_density_org_conv_3 <- gam(bulk_density_mean~organic_cert + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_org_conv_3) #R-sq.(adj) =  0.475   Deviance explained = 50.5%
+
+GAM_bulk_density_org_conv_4 <- gam(bulk_density_mean~organic_cert + s(agg_stability_mean) + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_org_conv_4) # R-sq.(adj) =  0.519   Deviance explained = 56.4%
+
+GAM_bulk_density_org_conv_5 <- gam(bulk_density_mean~organic_cert + s(agg_stability_mean) + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_org_conv_5) # R-sq.(adj) =  0.199   Deviance explained = 24.9%%
+
+GAM_bulk_density_org_conv_6 <- gam(bulk_density_mean~organic_cert + s(silt_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_org_conv_6) # R-sq.(adj) =  0.108   Deviance explained = 13.9%
+
+AIC(GAM_bulk_density_org_conv_1,
+    GAM_bulk_density_org_conv_2,
+    GAM_bulk_density_org_conv_3, # Model 3 has lowest AIC but is comparable/not significantly different than model 2
+    GAM_bulk_density_org_conv_4,
+    GAM_bulk_density_org_conv_5,
+    GAM_bulk_density_org_conv_6)
+
+GAM_bulk_density_org_conv_3 <- gam(bulk_density_mean~organic_cert + s(clay_content_mean), family = Gamma(link = "log"), data=data.farm)
+summary(GAM_bulk_density_org_conv_3)
+
+#Normality check
+GAM_bulk_density_org_conv_3_resid <- resid(GAM_bulk_density_org_conv_3)
+shapiro.test(GAM_bulk_density_org_conv_3_resid) # W = 0.94467, p-value = 0.02258; suggests possible non-normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_bulk_density_org_conv_3)
+print(bp_test) # BP = 0.8516, df = 2, p-value = 0.6532; homogeneity
+
+```
+
+
+### Random CV for parameterisation
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_clay, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(bulk_density_mean ~ organic_cert + 
+                                    s(clay_content_mean, k = k_clay, fx = TRUE) ,
+                                  data = .x, 
+                                  family = Gamma(link = "log"))),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$bulk_density_mean - .y)^2))),
+      
+      # Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$bulk_density_mean - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_clay = c(5, 10, 15),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_clay),
+                        ~ perform_cv(..1, data.farm)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) # K parameter of 5 has lowest CV RMSE & smallest gap with train RMSE
+
+
+```
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- bulk_density_mean ~ organic_cert + s(clay_content_mean, k = 5) 
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(2.6, 2.7, 2.8)
+
+# Container for LOOCV results
+loo_results <- list()
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = data.farm,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "bulk_density_mean",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+
+
+loo_results
+
+
+GAM_bulk_density_org_conv_3_cv <- gam(bulk_density_mean~organic_cert + s(clay_content_mean, k=5), family = Gamma(link = "log"), data=data.farm, method="REML")
+summary(GAM_bulk_density_org_conv_3_cv)
+plot(GAM_bulk_density_org_conv_3_cv, pages=1)
+# Key findings:
+# Organic management (organic_cert) is not significantly associated with bulk_density_mean (est = -.003112, p = 0.936), suggesting no strong evidence that organic management influence BD in this dataset.
+# The smooth term for clay content is significant (p = 1.64e-06, edf = .65), indicating a nonlinear effect on BD.
+
+# Model performance:
+# Adjusted R² = 0.474, Deviance explained = 50.4% 
+# The scale estimate (0.015929) and REML score (-36.804).
+
+# Ecological Interpretation:
+# Organic management does not appear to strongly influence BD in this dataset.
+# Clay content are significant factors affecting BD, with non-linear effect.
+# Additional variables may be important in explaining BD variation.
+
+
+#Normality check
+GAM_bulk_density_org_conv_3_cv_resid <- resid(GAM_bulk_density_org_conv_3_cv)
+shapiro.test(GAM_bulk_density_org_conv_3_cv_resid) # W = 0.94412, p-value = 0.02148; suggests possible non-normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_bulk_density_org_conv_3_cv)
+print(bp_test) # BP = 0.8516, df = 2, p-value = 0.6532; suggests homogeneity
+```
+
+
+### Visual
+```{r}
+
+GAM_bulk_density_org_conv_3_cv <- gam(bulk_density_mean~organic_cert + s(clay_content_mean, k=5), family = Gamma(link = "log"), data=data.farm, method="REML")
+
+ds_cat <- data_slice(GAM_bulk_density_org_conv_3_cv,
+  organic_cert = unique(data.farm$organic_cert),      
+  clay_content_mean = evenly(clay_content_mean, n = 3))       
+
+
+fv_cat <- fitted_values(GAM_bulk_density_org_conv_3_cv, data = ds_cat, scale = "response")
+
+
+gam_visual_org_BD <- ggplot(fv_cat, aes(x = organic_cert, y = .fitted, group = as.factor(clay_content_mean), color = as.factor(clay_content_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = data.farm, 
+              aes(x = organic_cert, y = bulk_density_mean), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Organic Classification",
+    y = expression("Predicted Bulk Density"~(g~cm^-3)),
+    color = "Clay Content (%)",
+    linetype = "Clay Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "right"
+  )
+
+gam_visual_org_BD
+
+```
+
+
+
+```{r}
+combined_plot <- grid_arrange_shared_legend(gam_visual_regen_conv_BD, gam_visual_org_BD, ncol = 2, position = "bottom")
+# Save it
+ggsave(combined_plot, 
+       filename = "gam_regen_org_BD_plot_comparison",
+       device = "pdf",
+       height = 6, width = 11, units = "in")
+```
+
+
+
+---
+
+#### GAM BD model comparison
+```{r}
+AIC(GAM_bulk_density_regen_3_cv,
+    GAM_bulk_density_regen_conv_3_cv,
+    GAM_bulk_density_org_conv_3_cv)
+
+```
+
+---
+
+# Multifunc Variable
+
+
+## Assessing for spatial autocorrelation
+```{r}
+#gam(mf_eff_2_cor~Score_traditional_mean + s(clay_content_mean) + s(silt_content_mean), data = combined_data)
+
+# Strength of spatial effect
+gam_model <- gam(mf_eff_2_cor ~ s(longitude_mean, latitude_mean, bs = "ds"), data = combined_data, method = "REML")
+summary(gam_model)
+#NB: EDF is ~7.08 & signficant signalling decently high spatial variability
+
+citation("gstat")
+# Semi-variogram
+# Convert data to a spatial object (if not already)
+coordinates(combined_data) <- ~longitude_mean+latitude_mean
+
+# Compute semivariogram
+variogram_model <- variogram(mf_eff_2_cor ~ 1, combined_data)
+
+# Plot semivariogram
+plot(variogram_model)
+
+# Fit a theoretical model (to find range)
+variogram_fit <- fit.variogram(variogram_model, model = vgm("Sph"))
+print(variogram_fit)
+# Based on this: spatial autocorrelation is effectively present up to about 1.22 units of distance. Beyond this, observations are essentially uncorrelated
+
+```
+
+
+---
+
+# GAM models for SH multifunc variable
+
+## Dominant multifunctionality & continuous Regen
+```{r}
+# Starting with all variables that showed significance in other models since eff2 is a combo of all those GAM's response variables
+GAM_eff2_regen_score_1 <- gam(mf_eff_2_cor~Score_traditional_mean + s(clay_content_mean) + s(silt_content_mean) + s(soil_pH_mean), data = combined_data)
+summary(GAM_eff2_regen_score_1)
+
+GAM_eff2_regen_score_2 <- gam(mf_eff_2_cor~Score_traditional_mean + s(clay_content_mean) + s(silt_content_mean), data = combined_data)
+summary(GAM_eff2_regen_score_2)
+
+GAM_eff2_regen_score_3 <- gam(mf_eff_2_cor~Score_traditional_mean + s(clay_content_mean), data = combined_data)
+summary(GAM_eff2_regen_score_3)
+
+GAM_eff2_regen_score_4 <- gam(mf_eff_2_cor~Score_traditional_mean + s(silt_content_mean), data = combined_data)
+summary(GAM_eff2_regen_score_4)
+
+GAM_eff2_regen_score_5 <- gam(mf_eff_2_cor~Score_traditional_mean + s(silt_content_mean) + s(soil_pH_mean), data = combined_data)
+summary(GAM_eff2_regen_score_5)
+
+GAM_eff2_regen_score_6 <- gam(mf_eff_2_cor~Score_traditional_mean + s(clay_content_mean) + s(soil_pH_mean), data = combined_data)
+summary(GAM_eff2_regen_score_6)
+
+AIC(GAM_eff2_regen_score_1,
+    GAM_eff2_regen_score_2, 
+    GAM_eff2_regen_score_3,
+    GAM_eff2_regen_score_4,
+    GAM_eff2_regen_score_5,
+    GAM_eff2_regen_score_6)
+# Models 1 & 2 have essentially equal AIC; because model 2 has less complexity (1 less variable), am going with that
+
+
+#Normality check
+GAM_eff2_regen_score_2_resid <- resid(GAM_eff2_regen_score_2)
+shapiro.test(GAM_eff2_regen_score_2_resid) # W = 0.98472, p-value = 0.7697; normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_eff2_regen_score_2)
+print(bp_test) # BP = 0.52273, df = 3, p-value = 0.9139; suggests homogeneity
+
+```
+
+
+### Random CV for parameterisation
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_clay, k_silt, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(mf_eff_2_cor ~ Score_traditional_mean + 
+                                    s(clay_content_mean, k = k_clay) +
+                                    s(silt_content_mean, k = k_silt),
+                                  data = .x)),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$mf_eff_2_cor - .y)^2))),
+      
+      # Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$mf_eff_2_cor - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_clay = c(5, 10, 15),
+  k_silt = c(5, 10, 15),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_clay, k_silt),
+                        ~ perform_cv(..1, ..2, combined_data)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) # Selecting k 5 & 5
+
+
+```
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- mf_eff_2_cor ~ Score_traditional_mean + s(clay_content_mean, k = 5) + silt_content_mean
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(1.0, 1.1, 1.2)
+
+# Container for LOOCV results
+loo_results <- list()
+
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = combined_data,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "mf_eff_2_cor",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+loo_results
+
+GAM_eff2_regen_score_2_cv <- gam(mf_eff_2_cor~Score_traditional_mean + s(clay_content_mean, k=5) + s(silt_content_mean, k=5), data = combined_data, method="REML")
+summary(GAM_eff2_regen_score_2_cv)
+plot(GAM_eff2_regen_score_2_cv, pages=1) # based on silt EDF (1), smooth term may not be necessary
+
+GAM_eff2_regen_score_2_cv_2 <- gam(mf_eff_2_cor~Score_traditional_mean + s(clay_content_mean, k=5) + silt_content_mean, data = combined_data, method="REML")
+summary(GAM_eff2_regen_score_2_cv_2) # Same deviance explained & same r-sq.
+plot(GAM_eff2_regen_score_2_cv_2, pages=1)
+# Key findings:
+# Continuous regen score (Score_traditional_mean) is significantly associated with multifunc (est = 0.068331, p = 0.007)
+# The smooth term for clay content is significant (p = 0.002, edf = 2.018), indicating a nonlinear effect on multifunc
+# Silt displayed mildly significant LINEAR relationship with multifunc (est = 0.018824, p = 0.059, edf = 1(in previous model when smooth was attached))
+
+# Model performance:
+# Adjusted R² = 0.495, Deviance explained = 53.7% 
+# The scale estimate (0.13017) and REML score (29.022).
+
+# Ecological Interpretation:
+# Continuous regen score appears to have strong influence over multifunc in this dataset.
+# Clay content significantly affects multifuc, with non-linear effect.
+# Silt has mildly significant linear affect on multifunc.
+
+citation("modelr")
+#Normality check
+GAM_eff2_regen_score_2_cv_2_resid <- resid(GAM_eff2_regen_score_2_cv_2)
+shapiro.test(GAM_eff2_regen_score_2_cv_2_resid) #W = 0.98616, p-value = 0.8286; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_eff2_regen_score_2_cv_2)
+print(bp_test) # BP = 0.52273, df = 3, p-value = 0.9139; suggests homogeneity
+```
+
+
+### Visual
+```{r}
+GAM_eff2_regen_score_2_cv_2 <- gam(mf_eff_2_cor~Score_traditional_mean + s(clay_content_mean, k=5) + silt_content_mean, data = combined_data, method="REML")
+
+typical_silt <- median(combined_data$silt_content_mean, na.rm = TRUE)
+
+ds_clay <- data_slice(
+  GAM_eff2_regen_score_2_cv_2,
+  Score_traditional_mean = evenly(Score_traditional_mean, n = 100),
+  clay_content_mean = evenly(clay_content_mean, n = 3), 
+  silt_content_mean = typical_silt
+)
+
+fv_clay <- fitted_values(
+  GAM_eff2_regen_score_2_cv_2,
+  data = ds_clay,
+  scale = "response"
+)
+
+gam_visual_DM_hold_silt <- fv_clay |>
+  ggplot(aes(
+    x = Score_traditional_mean,
+    y = .fitted,
+    color = factor(clay_content_mean),
+    group = clay_content_mean
+  )) +
+  # Observed data points (black jittered points)
+  geom_jitter(
+    data = combined_data,
+    mapping = aes(x = Score_traditional_mean, y = mf_eff_2_cor),
+    color = "black", alpha = 0.6, width = 0.2, height = 0,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(
+    aes(ymin = .lower_ci, ymax = .upper_ci, fill = factor(clay_content_mean)),
+    alpha = 0.1,
+    show.legend = FALSE
+  ) +
+  geom_line(size = 1.2) +
+  # Adjust colors and fill as needed (here just an example of 5 colors)
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Continuous Regen Score",
+    y = "Predicted Dominant Multifunctionality",
+    color = "Clay Content (%)"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+gam_visual_DM_hold_silt
+# Holding silt content at 29.62
+
+
+```
+
+
+Companion
+```{r}
+GAM_eff2_regen_score_2_cv_2 <- gam(mf_eff_2_cor~Score_traditional_mean + s(clay_content_mean, k=5) + silt_content_mean, data = combined_data, method="REML")
+
+typical_clay <- median(combined_data$clay_content_mean, na.rm = TRUE)
+
+ds_silt <- data_slice(
+  GAM_eff2_regen_score_2_cv_2,
+  Score_traditional_mean = evenly(Score_traditional_mean, n = 100),
+  silt_content_mean = evenly(silt_content_mean, n = 3),  # 3 levels of silt
+  clay_content_mean = typical_clay
+)
+
+fv_silt <- fitted_values(
+  GAM_eff2_regen_score_2_cv_2,
+  data = ds_silt,
+  scale = "response"
+)
+
+gam_visual_DM_hold_clay <- fv_silt |>
+  ggplot(aes(
+    x = Score_traditional_mean,
+    y = .fitted,
+    color = factor(silt_content_mean),
+    group = silt_content_mean
+  )) +
+  # Observed data points ( black jittered points)
+  geom_jitter(
+    data = combined_data,
+    mapping = aes(x = Score_traditional_mean, y = mf_eff_2_cor),
+    color = "black", alpha = 0.6, width = 0.2, height = 0,
+    inherit.aes = FALSE
+  ) +
+  geom_ribbon(
+    aes(ymin = .lower_ci, ymax = .upper_ci, fill = factor(silt_content_mean)),
+    alpha = 0.1,
+    show.legend = FALSE
+  ) +
+  geom_line(size = 1.2) +
+  # Adjust colors/fills
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Continuous Regen Score",
+    y = "Dominant Multifunctionality",
+    color = "Silt Content (%)"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  ) # Holds clay at 28.8375
+
+gam_visual_DM_hold_clay
+
+combined_plot <- grid.arrange(gam_visual_DM_hold_silt, gam_visual_DM_hold_clay, ncol = 2)
+
+# Save it
+ggsave(combined_plot, 
+       filename = "gam_DM_plot_comparison",
+       device = "pdf",
+       height = 6, width = 11, units = "in")
+```
+
+
+---
+
+## Dominant multifunctionality & binary Regen
+```{r}
+# Starting with all variables that showed significance in other models since eff2 is a combo of all those GAM's response variables
+GAM_eff2_regen_conv_1 <- gam(mf_eff_2_cor~Score.Result + s(clay_content_mean) + s(silt_content_mean) + s(soil_pH_mean), data = combined_data)
+summary(GAM_eff2_regen_conv_1)
+
+GAM_eff2_regen_conv_2 <- gam(mf_eff_2_cor~Score.Result + s(clay_content_mean) + s(silt_content_mean), data = combined_data)
+summary(GAM_eff2_regen_conv_2)
+
+GAM_eff2_regen_conv_3 <- gam(mf_eff_2_cor~Score.Result + s(clay_content_mean), data = combined_data)
+summary(GAM_eff2_regen_conv_3)
+
+GAM_eff2_regen_conv_4 <- gam(mf_eff_2_cor~Score.Result + s(silt_content_mean), data = combined_data)
+summary(GAM_eff2_regen_conv_4)
+
+GAM_eff2_regen_conv_5 <- gam(mf_eff_2_cor~Score.Result + s(silt_content_mean) + s(soil_pH_mean), data = combined_data)
+summary(GAM_eff2_regen_conv_5)
+
+GAM_eff2_regen_conv_6 <- gam(mf_eff_2_cor~Score.Result + s(clay_content_mean) + s(soil_pH_mean), data = combined_data)
+summary(GAM_eff2_regen_conv_6)
+
+AIC(GAM_eff2_regen_conv_1,
+    GAM_eff2_regen_conv_2, 
+    GAM_eff2_regen_conv_3,
+    GAM_eff2_regen_conv_4,
+    GAM_eff2_regen_conv_5,
+    GAM_eff2_regen_conv_6)
+# Models 1 & 2 have essentially equal AIC; because model 2 has less complexity (1 less variable), am going with that
+
+
+#Normality check
+GAM_eff2_regen_conv_2_resid <- resid(GAM_eff2_regen_conv_2)
+shapiro.test(GAM_eff2_regen_conv_2_resid) # W = 0.98749, p-value = 0.8776; normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_eff2_regen_conv_2)
+print(bp_test) # BP = 0.38652, df = 3, p-value = 0.943; suggests homogeneity
+
+```
+
+
+### Random CV for parameterisation
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_clay, k_silt, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(mf_eff_2_cor ~ Score.Result + 
+                                    s(clay_content_mean, k = k_clay) +
+                                    s(silt_content_mean, k = k_silt),
+                                  data = .x)),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$mf_eff_2_cor - .y)^2))),
+      
+      # Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$mf_eff_2_cor - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_clay = c(5, 10, 15),
+  k_silt = c(5, 10, 15),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_clay, k_silt),
+                        ~ perform_cv(..1, ..2, combined_data)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) # Selecting k 5 & 5
+
+
+```
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- mf_eff_2_cor ~ Score.Result + s(clay_content_mean, k = 5) + silt_content_mean
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(1.0, 1.1, 1.2)
+
+# Container for LOOCV results
+loo_results <- list()
+
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = combined_data,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "mf_eff_2_cor",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+loo_results
+
+GAM_eff2_regen_conv_2_cv <- gam(mf_eff_2_cor~Score.Result + s(clay_content_mean, k=5) + s(silt_content_mean, k=5), data = combined_data, method="REML")
+summary(GAM_eff2_regen_conv_2_cv)
+plot(GAM_eff2_regen_conv_2_cv, pages=1)
+
+GAM_eff2_regen_conv_2_cv_2 <- gam(mf_eff_2_cor~Score.Result + s(clay_content_mean, k=5) + silt_content_mean, data = combined_data, method="REML")
+summary(GAM_eff2_regen_conv_2_cv_2)
+plot(GAM_eff2_regen_conv_2_cv_2, pages=1)
+# Key findings:
+# Regenerative management (Score.Result) is significantly associated with multifunc (est = 0.23551, p = 0.052)
+# The smooth term for clay content is significant (p = 0.001, edf = 2.065), indicating a nonlinear effect on multifunc
+# Silt displayed  non-significant LINEAR relationship with multifunc (est = 0.01723, p = 0.098, edf = 1(in previous model when smooth was attached))
+
+# Model performance:
+# Adjusted R² = 0.454, Deviance explained = 50.1% 
+# The scale estimate (0.14057) and REML score (29.242).
+
+# Ecological Interpretation:
+# Regenerative management appears to have an influence over multifunc in this dataset.
+# Clay content significantly affects multifuc, with non-linear effect.
+# Silt has non-significant linear affect on multifunc.
+
+
+#Normality check
+GAM_eff2_regen_conv_2_cv_2_resid <- resid(GAM_eff2_regen_conv_2_cv_2)
+shapiro.test(GAM_eff2_regen_conv_2_cv_2_resid) #W = 0.98786, p-value = 0.8902; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_eff2_regen_conv_2_cv_2)
+print(bp_test) # BP = 0.38652, df = 3, p-value = 0.943; suggests homogeneity
+```
+
+
+### Visual
+```{r}
+GAM_eff2_regen_conv_2_cv_2 <- gam(mf_eff_2_cor~Score.Result + s(clay_content_mean, k=5) + silt_content_mean, data = combined_data, method="REML")
+
+typical_clay <- median(combined_data$clay_content_mean, na.rm = TRUE)
+
+ds_silt <- data_slice(
+  GAM_eff2_regen_conv_2_cv_2,
+  Score.Result = unique(combined_data$Score.Result),
+  silt_content_mean = evenly(silt_content_mean, n = 3),  # 3 levels of silt
+  clay_content_mean = typical_clay
+)
+
+fv_org <- fitted_values(GAM_eff2_regen_conv_2_cv_2, data = ds_silt, scale = "response")
+     
+gam_visual_regen_DM_hold_clay <- ggplot(fv_org, aes(x = Score.Result, y = .fitted, group = as.factor(silt_content_mean), color = as.factor(silt_content_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = combined_data, 
+              aes(x = Score.Result, y = mf_eff_2_cor), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Binary Regen Index",
+    y = "Predicted Dominant Multifunctionality",
+    color = "Silt Content (%)",
+    linetype = "Silt Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+
+gam_visual_regen_DM_hold_clay
+
+##########
+
+typical_silt <- median(combined_data$silt_content_mean, na.rm = TRUE)
+
+ds_pH <- data_slice(
+  GAM_eff2_regen_conv_2_cv_2,
+  Score.Result = unique(combined_data$Score.Result),
+  clay_content_mean = evenly(clay_content_mean, n = 3),  
+  silt_content_mean = typical_silt
+)
+
+fv_org <- fitted_values(GAM_eff2_regen_conv_2_cv_2, data = ds_pH, scale = "response")
+
+gam_visual_regen_DM_hold_silt <- ggplot(fv_org, aes(x = Score.Result, y = .fitted, group = as.factor(clay_content_mean), color = as.factor(clay_content_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = combined_data, 
+              aes(x = Score.Result, y = mf_eff_2_cor), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Binary Regen Index",
+    y = "Predicted Dominant Multifunctionality ",
+    color = "Clay Content (%)",
+    linetype = "Clay Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+   legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+
+gam_visual_regen_DM_hold_silt
+
+
+combined_plot <- grid.arrange(gam_visual_regen_DM_hold_clay, gam_visual_regen_DM_hold_silt, ncol = 2)
+
+# Save it
+ggsave(combined_plot, 
+       filename = "gam_regen_conv_DM_plot_comparison",
+       device = "pdf",
+       height = 6, width = 11, units = "in")
+```
+
+
+---
+
+
+## Dominant multifunctionality & organic classification
+```{r}
+# Starting with all variables that showed significance in other models since eff2 is a combo of all those GAM's response variables
+GAM_eff2_org_conv_1 <- gam(mf_eff_2_cor~organic_cert + s(clay_content_mean) + s(silt_content_mean) + s(soil_pH_mean), data = combined_data)
+summary(GAM_eff2_org_conv_1)
+
+GAM_eff2_org_conv_2 <- gam(mf_eff_2_cor~organic_cert + s(clay_content_mean) + s(silt_content_mean), data = combined_data)
+summary(GAM_eff2_org_conv_2)
+
+GAM_eff2_org_conv_3 <- gam(mf_eff_2_cor~organic_cert + s(clay_content_mean), data = combined_data)
+summary(GAM_eff2_org_conv_3)
+
+GAM_eff2_org_conv_4 <- gam(mf_eff_2_cor~organic_cert + s(silt_content_mean), data = combined_data)
+summary(GAM_eff2_org_conv_4)
+
+GAM_eff2_org_conv_5 <- gam(mf_eff_2_cor~organic_cert + s(silt_content_mean) + s(soil_pH_mean), data = combined_data)
+summary(GAM_eff2_org_conv_5)
+
+GAM_eff2_org_conv_6 <- gam(mf_eff_2_cor~organic_cert + s(clay_content_mean) + s(soil_pH_mean), data = combined_data)
+summary(GAM_eff2_org_conv_6)
+
+AIC(GAM_eff2_org_conv_1,
+    GAM_eff2_org_conv_2, 
+    GAM_eff2_org_conv_3,
+    GAM_eff2_org_conv_4,
+    GAM_eff2_org_conv_5,
+    GAM_eff2_org_conv_6)
+# Models 1 & 2 have essentially equal AIC; because model 2 has less complexity (1 less variable), am going with that
+
+
+#Normality check
+GAM_eff2_org_conv_2_resid <- resid(GAM_eff2_org_conv_2)
+shapiro.test(GAM_eff2_org_conv_2_resid) # W = 0.98022, p-value = 0.5746; normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_eff2_org_conv_2)
+print(bp_test) # BP = 0.74373, df = 3, p-value = 0.8629; suggests homogeneity
+
+```
+
+
+### Random CV for parameterisation
+```{r}
+set.seed(123)
+# Define a function that performs 5-fold CV for specified k values and also computes training RMSE
+perform_cv <- function(k_clay, k_silt, data) {
+  # Create 5-fold CV splits using modelr's crossv_kfold
+  cv_splits <- crossv_kfold(data, k = 5)
+  
+  # For each CV split: convert splits to data.frames, fit a GAM, predict, and compute RMSE for test and train sets
+  cv_results <- cv_splits %>% 
+    mutate(
+      # Ensure each split is a data.frame
+      train_df = map(train, as.data.frame),
+      test_df  = map(test, as.data.frame),
+      # Fit a GAM on the training data with the given k values
+      model = map(train_df, ~ gam(mf_eff_2_cor ~ organic_cert + 
+                                    s(clay_content_mean, k = k_clay) +
+                                    s(silt_content_mean, k = k_silt),
+                                  data = .x)),
+      # Predictions on test data
+      test_predictions = map2(model, test_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Calculate CV RMSE (test RMSE)
+      cv_rmse = map2_dbl(test_df, test_predictions, ~ sqrt(mean((.x$mf_eff_2_cor - .y)^2))),
+      
+      # Predictions on training data
+      train_predictions = map2(model, train_df, ~ predict(.x, newdata = .y, type = "response")),
+      # Compute training RMSE for each fold
+      train_rmse = map2_dbl(train_df, train_predictions, ~ sqrt(mean((.x$mf_eff_2_cor - .y)^2)))
+    )
+  
+  # Return both mean CV RMSE and mean training RMSE for these k values
+  mean_cv_rmse <- mean(cv_results$cv_rmse)
+  mean_train_rmse <- mean(cv_results$train_rmse)
+  
+  list(cv_rmse = mean_cv_rmse, train_rmse = mean_train_rmse)
+}
+
+# Define a grid of candidate k values for each smooth term
+k_grid <- expand.grid(
+  k_clay = c(5, 10, 15),
+  k_silt = c(5, 10, 15),
+  stringsAsFactors = FALSE
+)
+
+# For each candidate combination, perform CV and record the mean CV and training RMSE
+k_grid <- k_grid %>%
+  mutate(results = pmap(list(k_clay, k_silt),
+                        ~ perform_cv(..1, ..2, combined_data)),
+         mean_cv_rmse = map_dbl(results, "cv_rmse"),
+         mean_train_rmse = map_dbl(results, "train_rmse")) %>%
+  select(-results)
+
+print(k_grid) # Selecting k 5 & 5
+
+
+```
+
+
+### Spatially buffered LOOCV
+```{r}
+
+# Define GAM formula 
+modform <- mf_eff_2_cor ~ organic_cert + s(clay_content_mean, k = 5) + silt_content_mean
+
+# Define a list of buffer distances (in degrees)
+buffer_list <- c(1.0, 1.1, 1.2)
+
+# Container for LOOCV results
+loo_results <- list()
+
+
+for(buffer in buffer_list) {
+  res <- buffered_loo_gam(dat = combined_data,
+                          x_coord = "longitude_mean",
+                          y_coord = "latitude_mean",
+                          resp = "mf_eff_2_cor",
+                          rad = buffer,
+                          modform = modform)
+  loo_results[[paste0("buffer_", buffer)]] <- res
+  cat("Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+}
+
+
+loo_results
+
+GAM_eff2_org_conv_2_cv <- gam(mf_eff_2_cor~organic_cert + s(clay_content_mean, k=5) + s(silt_content_mean, k=5), data = combined_data, method="REML")
+summary(GAM_eff2_org_conv_2_cv)
+plot(GAM_eff2_org_conv_2_cv, pages=1)
+
+GAM_eff2_org_conv_2_cv_2 <- gam(mf_eff_2_cor~organic_cert + s(clay_content_mean, k=5) + silt_content_mean, data = combined_data, method="REML")
+summary(GAM_eff2_org_conv_2_cv_2)
+plot(GAM_eff2_org_conv_2_cv_2, pages=1)
+# Key findings:
+# Organic management (organic_Cert) is not significantly associated with multifunc (est = 0.06126, p = 0.615)
+# The smooth term for clay content is significant (p = 0.0008, edf = 2.298), indicating a nonlinear effect on multifunc
+# Silt displayed  non-significant LINEAR relationship with multifunc (est = 0.01911, p = 0.074, edf = 1(in previous model when smooth was attached))
+
+# Model performance:
+# Adjusted R² = 0.418, Deviance explained = 47% 
+# The scale estimate (0.1499) and REML score (30.963).
+
+# Ecological Interpretation:
+# Organic management appears to not have an influence over multifunc in this dataset.
+# Clay content significantly affects multifuc, with non-linear effect.
+# Silt has non-significant linear affect on multifunc.
+
+
+#Normality check
+GAM_eff2_org_conv_2_cv_2_resid <- resid(GAM_eff2_org_conv_2_cv_2)
+shapiro.test(GAM_eff2_org_conv_2_cv_2_resid) # W = 0.9796, p-value = 0.5486; suggests normality
+
+# Checking homogeneity - Using Breusch-pagan test
+bp_test <- bptest(GAM_eff2_org_conv_2_cv_2)
+print(bp_test) # BP = 0.74373, df = 3, p-value = 0.8629; suggests homogeneity
+```
+
+
+### Visuals
+```{r}
+
+GAM_eff2_org_conv_2_cv_2 <- gam(mf_eff_2_cor~organic_cert + s(clay_content_mean, k=5) + silt_content_mean, data = combined_data, method="REML")
+
+typical_clay <- median(combined_data$clay_content_mean, na.rm = TRUE)
+
+ds_silt <- data_slice(
+  GAM_eff2_org_conv_2_cv_2,
+  organic_cert = unique(combined_data$organic_cert),
+  silt_content_mean = evenly(silt_content_mean, n = 3),  # 3 levels of silt
+  clay_content_mean = typical_clay
+)
+
+fv_org <- fitted_values(GAM_eff2_org_conv_2_cv_2, data = ds_silt, scale = "response")
+     
+gam_visual_org_DM_hold_clay <- ggplot(fv_org, aes(x = organic_cert, y = .fitted, group = as.factor(silt_content_mean), color = as.factor(silt_content_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = combined_data, 
+              aes(x = organic_cert, y = mf_eff_2_cor), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Organic Classification",
+    y = "Predicted Dominant Multifunctionality",
+    color = "Silt Content (%)",
+    linetype = "Silt Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+    legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+
+gam_visual_org_DM_hold_clay
+
+##########
+
+typical_silt <- median(combined_data$silt_content_mean, na.rm = TRUE)
+
+ds_pH <- data_slice(
+  GAM_eff2_org_conv_2_cv_2,
+  organic_cert = unique(combined_data$organic_cert),
+  clay_content_mean = evenly(clay_content_mean, n = 3),  
+  silt_content_mean = typical_silt
+)
+
+fv_org <- fitted_values(GAM_eff2_org_conv_2_cv_2, data = ds_pH, scale = "response")
+
+gam_visual_org_DM_hold_silt <- ggplot(fv_org, aes(x = organic_cert, y = .fitted, group = as.factor(clay_content_mean), color = as.factor(clay_content_mean))) +
+  geom_line(size = 1.2) +  
+  geom_point(size = 3) +  
+  geom_jitter(data = combined_data, 
+              aes(x = organic_cert, y = mf_eff_2_cor), 
+              width = 0.1, alpha = 0.8, colour = "black", size = 1.5) +
+  geom_errorbar(aes(ymin = .lower_ci, ymax = .upper_ci), width = 0.1) +  
+  scale_color_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  labs(
+    x = "Binary Regen Index",
+    y = "Predicted Dominant Multifunctionality ",
+    color = "Clay Content (%)",
+    linetype = "Clay Content"
+  ) +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank(),
+   legend.position = "bottom",
+    legend.direction = "horizontal",
+    legend.box = "horizontal"
+  )
+
+gam_visual_org_DM_hold_silt
+
+
+combined_plot <- grid.arrange(gam_visual_org_DM_hold_clay, gam_visual_org_DM_hold_silt, ncol = 2)
+
+# Save it
+ggsave(combined_plot, 
+       filename = "gam_org_conv_DM_plot_comparison",
+       device = "pdf",
+       height = 6, width = 11, units = "in")
+
+
+```
+
+
+
+---
+
+#### GAM Dominant multifunctionality model comparisons
+```{r}
+AIC(GAM_eff2_regen_score_2_cv_2,
+    GAM_eff2_regen_conv_2_cv_2,
+    GAM_eff2_org_conv_2_cv_2)
+
+
+```
+
+---
+
+## Other Thesis Figures/Tables
+
+
+## SH Indicator GAM Table - with all gam variables, smooth terms, & important stats outputs
+```{r}
+
+# Function to extract GAM summary while correctly identifying the main explanatory variable
+extract_gam_summary <- function(gam_model, model_name, covariates = c("longitude_mean", "latitude_mean", "clay_content_mean", "silt_content_mean", "soil_pH_mean")) {
+  # Get response variable from the model formula
+  response <- deparse(formula(gam_model)[[2]])
+  
+  # Extract all terms from the model (both linear and smooth)
+  all_terms <- attr(terms(gam_model), "term.labels")
+  
+  # Identify non-smooth terms (potential explanatory variables)
+  non_smooth_terms <- all_terms[!grepl("^s\\(", all_terms)]
+  
+  # Identify covariates by finding terms in the covariate list
+  identified_covariates <- intersect(non_smooth_terms, covariates)
+  
+  # Remove known covariates from the list of non-smooth terms
+  explanatory_terms <- setdiff(non_smooth_terms, covariates)
+  
+  # Select only the primary explanatory variable (first in the list after removing covariates)
+  explanatory <- if (length(explanatory_terms) > 0) explanatory_terms[1] else NA
+  
+  # Extract smooth term details
+  smooth_list <- gam_model$smooth
+  smooth_terms <- if (length(smooth_list) > 0) {
+    paste(sapply(smooth_list, function(s) s$term), collapse = ", ")
+  } else NA
+  k_parameters <- if (length(smooth_list) > 0) {
+    paste(sapply(smooth_list, function(s) s$bs.dim), collapse = ", ")
+  } else NA
+  
+  # Extract model summary statistics
+  s <- summary(gam_model)
+  r_sq <- if (length(s$r.sq) == 0) NA else round(s$r.sq, 3)
+  dev_expl <- if (length(s$dev.expl) == 0) NA else round(s$dev.expl, 3)
+  aic_val <- round(AIC(gam_model), 2)
+  n_val   <- if (length(s$n) == 0) NA else s$n
+  
+  # Convert covariates to a single string or NA if empty
+  covariate_string <- if (length(identified_covariates) > 0) {
+    paste(identified_covariates, collapse = ", ")
+  } else NA
+  
+  # Return a data frame with extracted details
+  data.frame(Model           = model_name,
+             Response        = response,
+             Explanatory     = explanatory,
+             Covariates      = covariate_string,
+             `Smooth Terms`  = smooth_terms,
+             `Basis Dimensions (k-values)` = k_parameters,
+             `R-squared`     = r_sq,
+             `Deviance Expl.`= dev_expl,
+             AIC             = aic_val,
+             n               = n_val,
+             stringsAsFactors = FALSE,
+             check.names = FALSE)
+}
+
+# Define the list of GAM models
+gam_list <- list(
+  "SOC & Continuous Regen Score" = GAM_soc_regen_score_6_cv,
+  "SOC & Binary Regen Index" = GAM_soc_regen_conv_6_cv,
+  "SOC & Organic CLassification"   = GAM_soc_org_conv_6_cv,
+  "Microbial Biomass & Continuous Regen Score" = GAM_microbial_biomass_regen_5_cv_2,
+  "Microbial Biomass & Binary Regen Index"   = GAM_microbial_biomass_regen_conv_5_cv_2,
+  "Microbial Biomass & Organic CLassification"   = GAM_microbial_biomass_org_conv_5_cv_2,
+  "BD & Continuous Regen Score"   = GAM_bulk_density_regen_3_cv,
+  "BD & Binary Regen Index"   = GAM_bulk_density_regen_conv_3_cv,
+  "BD & Organic CLassification" = GAM_bulk_density_org_conv_3_cv,
+  "Dominant Multifunctionality & Continuous Regen Score" = GAM_eff2_regen_score_2_cv_2,
+  "Dominant Multifunctionality & Binary Regen Index" = GAM_eff2_regen_conv_2_cv_2,
+  "Dominant Multifunctionality & Organic Classification" = GAM_eff2_org_conv_2_cv_2
+)
+
+# Extract summary info from each GAM and combine into one data frame
+gam_summary_list <- lapply(names(gam_list), function(name) {
+  extract_gam_summary(gam_list[[name]], name, covariates = c( "clay_content_mean", "silt_content_mean", "soil_pH_mean"))
+})
+gam_summary_df <- do.call(rbind, gam_summary_list)
+
+# Define a custom theme for the table
+my_theme <- ttheme_default(
+  base_size   = 10,
+  base_colour = "black",
+  base_family = "serif",   # Use a serif font (e.g., Times)
+  padding     = unit(c(4, 4), "mm"),
+  core = list(
+    bg_params = list(fill = "white", col = "black"),
+    fg_params = list(fontface = 1)
+  ),
+  colhead = list(
+    bg_params = list(fill = "white", col = "black"),
+    fg_params = list(fontface = "bold")
+  )
+)
+
+# Create the table grob and export as PDF
+tg <- tableGrob(gam_summary_df, rows = rep("", nrow(gam_summary_df)), theme = my_theme)
+
+# Draw the table on a new page
+grid.newpage()
+grid.draw(tg)
+
+# Export table as a PDF
+pdf("version4_GAM_Summary_Table.pdf", height = 4, width = 15)
+grid.draw(tg)
+dev.off()
+
+
+```
+
+
+---
+
+## SH Variables histograms
+
+May be helpful to have some visuals in appendix showing raw data distributions via histogram? May be to much to do raw data distributions around explanatory variables (whole lotta figures) but histograms would be sufficient to justify family setting that I state in thesis.
+
+```{r}
+
+raw_SOC_hist <- ggplot(data.farm, aes(x=SOC_3000_mean)) + 
+  geom_histogram(aes(y=after_stat(density)), binwidth=5, color="black", fill = "#56B4E9") + 
+    geom_density(lwd = 1.2,
+               linetype = 2,
+               colour = 1) +
+  labs(
+    x = expression("SOC (3000mm Depth)"~(Mg~ha^-1)),
+    y = "") +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank()
+  )
+raw_SOC_hist
+
+raw_MB_hist <- ggplot(data.farm, aes(x=microbial_biomass_mean)) + 
+  geom_histogram(aes(y=after_stat(density)), binwidth=250, color="black", fill = "#E69F00") + 
+    geom_density(lwd = 1.2,
+               linetype = 2,
+               colour = 1) +
+  labs(
+    x = expression("Microbial Biomass"~(ng~g^-1)),
+    y = "") +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank()
+  )
+raw_MB_hist
+
+raw_BD_hist <- ggplot(data.farm, aes(x=bulk_density_mean)) + 
+  geom_histogram(aes(y=after_stat(density)), binwidth=0.03, color="black", fill = "#CC79A7") + 
+  geom_density(lwd = 1.2,
+               linetype = 2,
+               colour = 1) +
+  labs(
+    x = expression("Bulk Density"~(g~cm^-3)),
+    y = "") +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank()
+  )
+raw_BD_hist
+
+combined_plot <- grid.arrange(raw_SOC_hist, raw_MB_hist, raw_BD_hist, ncol = 3)
+
+# Save it
+ggsave(combined_plot, 
+       filename = "SH_Indicators_Distribution",
+       device = "pdf",
+       height = 6, width = 13, units = "in")
+
+
+raw_DF_hist <- ggplot(combined_data, aes(x=mf_eff_2_cor)) + 
+  geom_histogram(aes(y=after_stat(density)), binwidth=0.09, color="black", fill = "#009E73") + 
+  geom_density(lwd = 1.2,
+               linetype = 2,
+               colour = 1) +
+  labs(
+    x = "Dominant Multifunctionality",
+    y = "") +
+  theme(
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black"),
+    legend.key = element_blank()
+  )
+raw_DF_hist
+
+ggsave(raw_DF_hist, 
+       filename = "DomMultifunc_Distribution",
+       device = "pdf",
+       height = 6, width = 11, units = "in")
+
+
+# "#E69F00", "#56B4E9", "#CC79A7"
+```
+
+
+
+---
+
+## Boxplot Visuals for LOOCV results
+
+```{r}
+
+# Define GAM models and corresponding buffer distances
+soc_gam_models <- list(
+  Continuous_Regen_Score = list(
+    formula = SOC_3000_mean ~ Score_traditional_mean + s(clay_content_mean, k = 5),
+    buffers = c(1.25, 1.4, 1.5)  
+  ),
+  Binary_Regen_Index = list(
+    formula = SOC_3000_mean ~ Score.Result + s(clay_content_mean, k = 5),
+    buffers = c(1.25, 1.4, 1.5)  
+  ),
+  Organic_Classification = list(
+    formula = SOC_3000_mean ~ organic_cert + s(clay_content_mean, k = 5),
+    buffers = c(1.25, 1.4, 1.5)  
+  )
+)
+
+# Initialize dataframe for storing results
+soc_loo_results_df <- data.frame()
+
+# Loop through models and their respective buffer distances
+for (gam_name in names(soc_gam_models)) {
+  modform <- soc_gam_models[[gam_name]]$formula  # Extract model formula
+  buffer_list <- soc_gam_models[[gam_name]]$buffers  # Extract specific buffer distances
+  
+  for (buffer in buffer_list) {
+    res <- buffered_loo_gam(
+      dat = data.farm,
+      x_coord = "longitude_mean",
+      y_coord = "latitude_mean",
+      resp = all.vars(modform)[1],  # Automatically extract response variable
+      rad = buffer,
+      modform = modform
+    )
+    
+    # Store results
+    soc_loo_results_df <- rbind(soc_loo_results_df, data.frame(
+      GAM_Model = gam_name,
+      Buffer_Distance = buffer,
+      RMSE = res$RMSE
+    ))
+    
+    cat("GAM:", gam_name, "Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+  }
+}
+
+
+SOC_loocv <- ggplot(soc_loo_results_df, aes(x = factor(Buffer_Distance), y = RMSE)) +
+  geom_boxplot(aes(fill = factor(Buffer_Distance)), alpha = 1) +
+  geom_point(aes(shape = GAM_Model), position = "jitter", size = 2.5) +
+  labs(x = "Buffer Distance (Degrees)", y = "Root Mean Square Error (RMSE)", title = "Soil Organic Carbon (SOC)", shape = "Management Index") +
+  scale_fill_manual(name = "Buffer Distance", values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(hjust=0.5),
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black")
+  )
+SOC_loocv
+
+
+##########
+
+mb_gam_models <- list(
+  Continuous_Regen_Score = list(
+   formula = microbial_biomass_mean~Score_traditional_mean + soil_pH_mean + silt_content_mean,
+    buffers = c(0.5, 0.75, 1)  
+  ),
+ Binary_Regen_Index = list(
+    formula = microbial_biomass_mean~Score.Result + soil_pH_mean + silt_content_mean,
+    buffers = c(0.5, 0.75, 1)  
+  ),
+  Organic_Classification = list(
+    formula = microbial_biomass_mean~organic_cert + soil_pH_mean + silt_content_mean,
+    buffers = c(0.5, 0.75, 1)  
+  )
+)
+
+# Initialize dataframe for storing results
+mb_loo_results_df <- data.frame()
+
+# Loop through models and their respective buffer distances
+for (gam_name in names(mb_gam_models)) {
+  modform <- mb_gam_models[[gam_name]]$formula  # Extract model formula
+  buffer_list <- mb_gam_models[[gam_name]]$buffers  # Extract specific buffer distances
+  
+  for (buffer in buffer_list) {
+    res <- buffered_loo_gam(
+      dat = data.farm,
+      x_coord = "longitude_mean",
+      y_coord = "latitude_mean",
+      resp = all.vars(modform)[1],  # Automatically extract response variable
+      rad = buffer,
+      modform = modform
+    )
+    
+    # Store results
+    mb_loo_results_df <- rbind(mb_loo_results_df, data.frame(
+      GAM_Model = gam_name,
+      Buffer_Distance = buffer,
+      RMSE = res$RMSE
+    ))
+    
+    cat("GAM:", gam_name, "Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+  }
+}
+
+MB_loocv <- ggplot(mb_loo_results_df, aes(x = factor(Buffer_Distance), y = RMSE)) +
+  geom_boxplot(aes(fill = factor(Buffer_Distance)), alpha = 1) +
+  geom_point(aes(shape = GAM_Model), position = "jitter", size = 2.5) +
+  labs(x = "Buffer Distance (Degrees)", y = "Root Mean Square Error (RMSE)", title = "Microbial Biomass", shape = "Management Index") +
+  scale_fill_manual(name = "Buffer Distance", values = c("#009E73", "#F0E442", "#0072B2")) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(hjust=0.5),
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black")
+  )
+MB_loocv
+library(ggplot2)
+library(cowplot)
+#install.packages("gridGraphics") 
+library(gridGraphics)
+
+
+# Create a dummy data frame with a factor that has all 6 levels.
+dummy_df <- data.frame(
+  Buffer_Distance = factor(
+    c("1.25", "1.4", "1.5", "0.5", "0.75", "1"),
+    levels = c("1.25", "1.4", "1.5", "0.5", "0.75", "1")
+  )
+)
+
+# Build the dummy plot. don’t care about the actual plotting here; only need its legend.
+dummy_plot <- ggplot(dummy_df, aes(x = Buffer_Distance, fill = Buffer_Distance)) +
+  geom_bar() +
+  scale_fill_manual(
+    name = "Buffer Distance",
+    values = c(
+      "1.25" = "#E69F00", 
+      "1.4"  = "#56B4E9", 
+      "1.5"  = "#CC79A7",
+      "0.5"   = "#009E73", 
+      "0.75"  = "#F0E442", 
+      "1"     = "#0072B2"
+    ),
+    guide = guide_legend(
+      override.aes = list(
+        color = "black",   
+        size = 0.3         
+      )
+    )
+  ) +
+  theme_void() +
+  theme(legend.position = "right",
+        legend.key = element_rect(color = "black", size = 0.3),  
+        text = element_text(family = "Times", size = 14)
+ )
+
+# Extract the unified fill legend
+legend_buffer_combined <- cowplot::get_legend(dummy_plot)
+
+# Extract only the shape legend (for Management Index) by suppressing the fill legend.
+legend_management <- cowplot::get_legend(
+  SOC_loocv + guides(fill = "none") + theme(legend.position = "right")
+)
+
+# Combine the two legends 
+combined_legends <- cowplot::plot_grid(legend_buffer_combined, legend_management, ncol = 1, align = "v")
+
+final_plot_with_legends <- ggdraw(plot_grid(
+  cowplot::plot_grid(SOC_loocv, MB_loocv, nrow = 1, labels = c("A", "B")),
+  combined_legends,  
+  ncol = 2,
+  rel_widths = c(3, 1),
+  align = "hv",
+  clip = "off"  # Don't clip anything off
+)) + 
+  theme(plot.margin = margin(1, 1, 1, 1, "cm"))  
+
+print(final_plot_with_legends)
+
+ggsave(final_plot_with_legends, 
+       filename = "SOC_MB_RMSE_Boxplots",
+       device = "pdf",
+       height = 9, width = 14, units = "in")
+
+
+
+###########
+bd_gam_models <- list(
+  Continuous_Regen_Score = list(
+    formula = bulk_density_mean~Score_traditional_mean + s(clay_content_mean, k=5),
+    buffers = c(2.6, 2.7, 2.8)  
+  ),
+  Binary_Regen_Index = list(
+    formula = bulk_density_mean~Score.Result + s(clay_content_mean, k=5),
+    buffers = c(2.6, 2.7, 2.8)  
+  ),
+  Organic_Classification = list(
+    formula = bulk_density_mean~organic_cert + s(clay_content_mean, k=5),
+    buffers = c(2.6, 2.7, 2.8)  
+  )
+)
+
+# Initialize dataframe for storing results
+bd_loo_results_df <- data.frame()
+
+# Loop through models and their respective buffer distances
+for (gam_name in names(bd_gam_models)) {
+  modform <- bd_gam_models[[gam_name]]$formula  # Extract model formula
+  buffer_list <- bd_gam_models[[gam_name]]$buffers  # Extract specific buffer distances
+  
+  for (buffer in buffer_list) {
+    res <- buffered_loo_gam(
+      dat = data.farm,
+      x_coord = "longitude_mean",
+      y_coord = "latitude_mean",
+      resp = all.vars(modform)[1],  # Automatically extract response variable
+      rad = buffer,
+      modform = modform
+    )
+    
+    # Store results
+    bd_loo_results_df <- rbind(bd_loo_results_df, data.frame(
+      GAM_Model = gam_name,
+      Buffer_Distance = buffer,
+      RMSE = res$RMSE
+    ))
+    
+    cat("GAM:", gam_name, "Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+  }
+}
+
+BD_loocv <- ggplot(bd_loo_results_df, aes(x = factor(Buffer_Distance), y = RMSE)) +
+  geom_boxplot(aes(fill = factor(Buffer_Distance)), alpha = 1) +
+  geom_point(aes(shape = GAM_Model), position = "jitter", size = 2.5) +
+  labs(x = "Buffer Distance (Degrees)", y = "Root Mean Square Error (RMSE)", title = "Bulk Density (BD)", shape = "Management Index") +
+  scale_color_manual(name = "GAM Model", values = c("#E69F00", "#56B4E9", "#CC79A7")) +  
+  scale_fill_manual(name = "Buffer Distance", values = c("#E69F00", "#56B4E9", "#CC79A7")) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(hjust=0.5),
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black")
+  )
+BD_loocv
+
+
+###############
+dm_gam_models <- list(
+  Continuous_Regen_Score = list(
+    formula = mf_eff_2_cor ~ Score_traditional_mean + s(clay_content_mean, k = 5) + silt_content_mean,
+    buffers = c(1.0, 1.1, 1.2)  
+  ),
+  Binary_Regen_Index = list(
+    formula = mf_eff_2_cor ~ Score.Result + s(clay_content_mean, k = 5) + silt_content_mean,
+    buffers = c(1.0, 1.1, 1.2)  
+  ),
+  Organic_Classification = list(
+    formula = mf_eff_2_cor ~ organic_cert + s(clay_content_mean, k = 5) + silt_content_mean,
+    buffers = c(1.0, 1.1, 1.2)  
+  )
+)
+
+# Initialize dataframe for storing results
+dm_loo_results_df <- data.frame()
+
+# Loop through models and their respective buffer distances
+for (gam_name in names(dm_gam_models)) {
+  modform <- dm_gam_models[[gam_name]]$formula  # Extract model formula
+  buffer_list <- dm_gam_models[[gam_name]]$buffers  # Extract specific buffer distances
+  
+  for (buffer in buffer_list) {
+    res <- buffered_loo_gam(
+      dat = combined_data,
+      x_coord = "longitude_mean",
+      y_coord = "latitude_mean",
+      resp = all.vars(modform)[1],  # Automatically extract response variable
+      rad = buffer,
+      modform = modform
+    )
+    
+    # Store results
+    dm_loo_results_df <- rbind(dm_loo_results_df, data.frame(
+      GAM_Model = gam_name,
+      Buffer_Distance = buffer,
+      RMSE = res$RMSE
+    ))
+    
+    cat("GAM:", gam_name, "Buffer:", buffer, "RMSE:", res$RMSE, "\n")
+  }
+}
+
+DM_loocv <- ggplot(dm_loo_results_df, aes(x = factor(Buffer_Distance), y = RMSE)) +
+  geom_boxplot(aes(fill = factor(Buffer_Distance)), alpha = 1) +
+  geom_point(aes(shape = GAM_Model), position = "jitter", size = 2.5) +
+  labs(x = "Buffer Distance (Degrees)", y = "Root Mean Square Error (RMSE)", title = "Dominant Multifunctionality", shape = "Management Index") +
+  scale_color_manual(name = "GAM Model", values = c("#009E73", "#F0E442", "#0072B2")) +  
+  scale_fill_manual(name = "Buffer Distance", values = c("#009E73", "#F0E442", "#0072B2")) +
+  theme_minimal() +
+  theme(
+    legend.position = "right",
+    plot.title = element_text(hjust=0.5),
+    text = element_text(family = "Times", size = 14),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_line(color = "black")
+  )
+DM_loocv
+BD_loocv
+
+##################
+
+# Create a dummy data frame with a factor that has all 6 levels.
+dummy_df <- data.frame(
+  Buffer_Distance = factor(
+    c("2.6", "2.7", "2.8", "1.0", "1.1", "1.2"),
+    levels = c("2.6", "2.7", "2.8", "1.0", "1.1", "1.2")
+  )
+)
+
+# Build the dummy plot. don’t care about the actual plotting here; only need its legend.
+dummy_plot <- ggplot(dummy_df, aes(x = Buffer_Distance, fill = Buffer_Distance)) +
+  geom_bar() +
+  scale_fill_manual(
+    name = "Buffer Distance",
+    values = c(
+      "2.6"  = "#E69F00", 
+      "2.7"  = "#56B4E9", 
+      "2.8"  = "#CC79A7",
+      "1.0"  = "#009E73", 
+      "1.1"  = "#F0E442", 
+      "1.2"  = "#0072B2"
+    ),
+    guide = guide_legend(
+      override.aes = list(
+        color = "black",   
+        size = 0.3         
+      )
+    )
+  ) +
+  theme_void() +
+  theme(legend.position = "right",
+        legend.key = element_rect(color = "black", size = 0.3),  
+        text = element_text(family = "Times", size = 14)
+ )
+
+# Extract the unified fill legend
+legend_buffer_combined <- cowplot::get_legend(dummy_plot)
+
+# Extract only the shape legend (for Management Index) by suppressing the fill legend.
+legend_management <- cowplot::get_legend(
+  BD_loocv + guides(fill = "none") + theme(legend.position = "right")
+)
+
+#Remove automatic legends
+BD_loocv <- BD_loocv + theme(legend.position = "none")
+DM_loocv <- DM_loocv + theme(legend.position = "none")
+
+
+# Combine the two legends 
+combined_legends <- cowplot::plot_grid(legend_buffer_combined, legend_management, ncol = 1, align = "v")
+
+final_plot_with_legends_2 <- ggdraw(plot_grid(
+  cowplot::plot_grid(BD_loocv, DM_loocv, nrow = 1, labels = c("A", "B")),
+  combined_legends,  
+  ncol = 2,
+  rel_widths = c(3, 1),
+  align = "hv",
+  clip = "off"  # Don't clip anything off
+)) + 
+  theme(plot.margin = margin(1, 1, 1, 1, "cm"))  
+
+print(final_plot_with_legends_2)
+
+ggsave(final_plot_with_legends_2, 
+       filename = "BD_DM_RMSE_Boxplots",
+       device = "pdf",
+       height = 9, width = 14, units = "in")
+
+
+
+```
+
+
+---
+
+## Table for RMSE LOOCV Output
+```{r}
+
+# Function to extract primary explanatory variable from the formula
+extract_primary_variable <- function(formula) {
+  terms <- all.vars(formula)
+  return(terms[2])  # Extract the first explanatory variable
+}
+
+# Create a lookup table with GAM names and their primary explanatory variable
+soc_primary_vars <- data.frame(
+  GAM_Model = names(soc_gam_models),
+  Primary_Explanatory_Variable = sapply(soc_gam_models, function(x) extract_primary_variable(x$formula))
+)
+
+# Merge this lookup table with the main results dataframe
+soc_loo_results_df <- soc_loo_results_df %>%
+  left_join(soc_primary_vars, by = "GAM_Model") %>%
+  mutate(Response_Variable = "Soil Organic Carbon (SOC)") %>%
+  select(Response_Variable, Primary_Explanatory_Variable, Buffer_Distance, RMSE)  # Keep only relevant columns
+
+#microbial biomass
+mb_primary_vars <- data.frame(
+  GAM_Model = names(mb_gam_models),
+  Primary_Explanatory_Variable = sapply(mb_gam_models, function(x) extract_primary_variable(x$formula))
+)
+
+# Merge this lookup table with the main results dataframe
+mb_loo_results_df <- mb_loo_results_df %>%
+  left_join(mb_primary_vars, by = "GAM_Model") %>%
+  mutate(Response_Variable = "Microbial Biomass") %>%
+  select(Response_Variable, Primary_Explanatory_Variable, Buffer_Distance, RMSE)  # Keep only relevant columns
+print(mb_loo_results_df)
+
+#BD
+bd_primary_vars <- data.frame(
+  GAM_Model = names(bd_gam_models),
+  Primary_Explanatory_Variable = sapply(bd_gam_models, function(x) extract_primary_variable(x$formula))
+)
+
+# Merge this lookup table with the main results dataframe
+bd_loo_results_df <- bd_loo_results_df %>%
+  left_join(bd_primary_vars, by = "GAM_Model") %>%
+  mutate(Response_Variable = "Bulk Density (BD)") %>%
+  select(Response_Variable, Primary_Explanatory_Variable, Buffer_Distance, RMSE)  # Keep only relevant columns
+print(bd_loo_results_df)
+
+#Dominant Multifunctionality
+dm_primary_vars <- data.frame(
+  GAM_Model = names(dm_gam_models),
+  Primary_Explanatory_Variable = sapply(dm_gam_models, function(x) extract_primary_variable(x$formula))
+)
+
+# Merge this lookup table with the main results dataframe
+dm_loo_results_df <- dm_loo_results_df %>%
+  left_join(dm_primary_vars, by = "GAM_Model") %>%
+  mutate(Response_Variable = "Dominant Multifunctionality") %>%
+  select(Response_Variable, Primary_Explanatory_Variable, Buffer_Distance, RMSE)  # Keep only relevant columns
+print(dm_loo_results_df)
+
+# Combine all results into one dataframe
+loo_results_df <- bind_rows(soc_loo_results_df, mb_loo_results_df, bd_loo_results_df, dm_loo_results_df)
+
+loo_results_df <- loo_results_df %>%
+  select(Response_Variable, Primary_Explanatory_Variable, Buffer_Distance, RMSE)
+
+print(loo_results_df)
+
+# Define a custom theme for the table
+my_theme <- ttheme_default(
+  base_size   = 10,
+  base_colour = "black",
+  base_family = "serif",   # Use a serif font (e.g., Times)
+  padding     = unit(c(4, 4), "mm"),
+  core = list(
+    bg_params = list(fill = "white", col = "black"),
+    fg_params = list(fontface = 1)
+  ),
+  colhead = list(
+    bg_params = list(fill = "white", col = "black"),
+    fg_params = list(fontface = "bold")
+  )
+)
+
+
+# Create the table grob and export as PDF
+tg <- tableGrob(loo_results_df, rows = rep("", nrow(loo_results_df)), theme = my_theme)
+
+# Draw the table on a new page
+grid.newpage()
+grid.draw(tg)
+
+# Export table as a PDF
+pdf("LOOCV_RMSE_Summary_Table.pdf", height = 15, width = 10)
+grid.draw(tg)
+dev.off()
+
+
+## Another style of table:
+library(sjPlot)
+
+tab_df(loo_results_df,
+       title = "Spatially Buffered Leave-One-Out Cross-Validation Model Results",
+       digits = 3,
+       show.rownames = FALSE, # Hide row numbers to keep the table clean
+       css.cell = "font-size: 12px; line-height: 0.8;",
+       file = "Different_Style_LOOCV_Results_Table.html")  
+
+
+
+```
+
+
+
