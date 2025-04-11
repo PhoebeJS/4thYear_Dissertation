@@ -20,3 +20,8 @@ Only one R '.Rmd' file is presented here with all relevant code included on it. 
 [R Code](https://github.com/PhoebeJS/4thYear_Dissertation/tree/main/R%20Code)
 
 [Output](https://github.com/PhoebeJS/4thYear_Dissertation/tree/main/Output)
+
+
+
+
+![In the Field](IMG_5274.jpeg)
