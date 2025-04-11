@@ -15,4 +15,8 @@ Only one R '.Rmd' file is presented here with all relevant code included on it. 
 >Also important is that much of this code was adapted from other works, specifically the LOOCV; where possible I have tried to mention them specifically in the code but references to these authors are also made in my main thesis. These are adaptations, not copies-and-pastes so it is possible that some of the nuance from the original code was lost in my adaptation.
 
 
-### Table of Contentx
+### Repo Directory
+
+[R Code](https://github.com/PhoebeJS/4thYear_Dissertation/tree/main/R%20Code)
+
+[Output](https://github.com/PhoebeJS/4thYear_Dissertation/tree/main/Output)
