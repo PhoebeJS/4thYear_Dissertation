@@ -25,3 +25,6 @@ Only one R '.Rmd' file is presented here with all relevant code included on it. 
 
 
 ![In the Field](IMG_5274.jpeg)
+
+{:.image-caption}
+*The fieldwork team enjoying a lovely view ontop of the van (do not do this at home)*
