@@ -506,6 +506,20 @@ summary(GAM_soc_regen_score_6_cv)
 gam.check(GAM_soc_regen_score_6_cv)
 plot.gam(GAM_soc_regen_score_6_cv)
 
+# CI
+all_coef <- coef(GAM_soc_regen_score_6_cv)
+all_se <- sqrt(diag(vcov(GAM_soc_regen_score_6_cv)))
+parametric_terms <- names(summary(GAM_soc_regen_score_6_cv)$p.coeff)
+
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
+
 #Normality check
 GAM_soc_regen_score_6_cv_resid <- resid(GAM_soc_regen_score_6_cv)
 shapiro.test(GAM_soc_regen_score_6_cv_resid) # W = 0.95857, p-value = 0.08276; suggests normality
@@ -748,6 +762,20 @@ summary(GAM_soc_regen_conv_6_cv)
 gam.check(GAM_soc_regen_conv_6_cv)
 plot.gam(GAM_soc_regen_conv_6_cv)
 
+# CI
+all_coef <- coef(GAM_soc_regen_conv_6_cv)
+all_se <- sqrt(diag(vcov(GAM_soc_regen_conv_6_cv)))
+parametric_terms <- names(summary(GAM_soc_regen_conv_6_cv)$p.coeff)
+
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
+
 #Normality check
 GAM_soc_regen_conv_6_cv_resid <- resid(GAM_soc_regen_conv_6_cv)
 shapiro.test(GAM_soc_regen_conv_6_cv_resid) # W = 0.97132, p-value = 0.2732; suggests normality
@@ -944,6 +972,19 @@ plot(GAM_soc_org_conv_6_cv, pages = 1)
 # Organic certification does not appear to be a key driver of SOC levels in this dataset.
 # Clay content remains a significant factor influencing SOC, with a nonlinear effect.
 
+# CI
+all_coef <- coef(GAM_soc_org_conv_6_cv)
+all_se <- sqrt(diag(vcov(GAM_soc_org_conv_6_cv)))
+parametric_terms <- names(summary(GAM_soc_org_conv_6_cv)$p.coeff)
+
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
 
 gam.check(GAM_soc_org_conv_6_cv)
 plot.gam(GAM_soc_org_conv_6_cv)
@@ -1187,7 +1228,19 @@ summary (GAM_microbial_biomass_regen_5_cv_2)
 # Soil pH and silt content both significantly influence microbial biomass.
 # Additional factors may be important in explaining microbial biomass variation.
 
+# CI
+all_coef <- coef(GAM_microbial_biomass_regen_5_cv_2)
+all_se <- sqrt(diag(vcov(GAM_microbial_biomass_regen_5_cv_2)))
+parametric_terms <- names(summary(GAM_microbial_biomass_regen_5_cv_2)$p.coeff)
 
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
 
 #Normality check
 GAM_microbial_biomass_regen_5_cv_2_resid <- resid(GAM_microbial_biomass_regen_5_cv_2)
@@ -1539,7 +1592,19 @@ summary (GAM_microbial_biomass_regen_conv_5_cv_2) # Model summary/overall outcom
 # Soil properties (pH and silt content) are key drivers of microbial biomass, with higher pH and silt content favoring microbial abundance.
 # The lack of a significant effect of regenerative management suggests that soil microbial biomass may be more influenced by inherent soil characteristics than by management practices alone.
 
+# CI
+all_coef <- coef(GAM_microbial_biomass_regen_conv_5_cv_2)
+all_se <- sqrt(diag(vcov(GAM_microbial_biomass_regen_conv_5_cv_2)))
+parametric_terms <- names(summary(GAM_microbial_biomass_regen_conv_5_cv_2)$p.coeff)
 
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
 
 #Normality check
 GAM_microbial_biomass_regen_conv_5_cv_resid <- resid(GAM_microbial_biomass_regen_conv_5_cv)
@@ -1796,6 +1861,19 @@ summary (GAM_microbial_biomass_org_conv_5_cv_2)
 # Soil properties (pH and silt content) are key drivers of microbial biomass, with higher pH and silt content favoring microbial abundance.
 # The lack of a significant effect of regenerative management suggests that soil microbial biomass may be more influenced by inherent soil characteristics than by management practices alone.
 
+# CI
+all_coef <- coef(GAM_microbial_biomass_org_conv_5_cv_2)
+all_se <- sqrt(diag(vcov(GAM_microbial_biomass_org_conv_5_cv_2)))
+parametric_terms <- names(summary(GAM_microbial_biomass_org_conv_5_cv_2)$p.coeff)
+
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
 
 #Normality check
 GAM_microbial_biomass_org_conv_5_cv_resid <- resid(GAM_microbial_biomass_org_conv_5_cv)
@@ -2278,6 +2356,20 @@ plot(GAM_bulk_density_regen_conv_3_cv, pages=1)
 # Clay content are significant factors affecting BD, with marginally non-linear effect.
 # Additional variables may be important in explaining BD variation.
 
+# CI
+all_coef <- coef(GAM_bulk_density_regen_conv_3_cv)
+all_se <- sqrt(diag(vcov(GAM_bulk_density_regen_conv_3_cv)))
+parametric_terms <- names(summary(GAM_bulk_density_regen_conv_3_cv)$p.coeff)
+
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
+
 #Normality check
 GAM_bulk_density_regen_conv_3_cv_resid <- resid(GAM_bulk_density_regen_conv_3_cv)
 shapiro.test(GAM_bulk_density_regen_conv_3_cv_resid) # W = 0.94806, p-value = 0.03084; suggests possible non-normality
@@ -2477,6 +2569,19 @@ plot(GAM_bulk_density_org_conv_3_cv, pages=1)
 # Clay content are significant factors affecting BD, with non-linear effect.
 # Additional variables may be important in explaining BD variation.
 
+# CI
+all_coef <- coef(GAM_bulk_density_org_conv_3_cv)
+all_se <- sqrt(diag(vcov(GAM_bulk_density_org_conv_3_cv)))
+parametric_terms <- names(summary(GAM_bulk_density_org_conv_3_cv)$p.coeff)
+
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
 
 #Normality check
 GAM_bulk_density_org_conv_3_cv_resid <- resid(GAM_bulk_density_org_conv_3_cv)
@@ -2735,6 +2840,20 @@ plot(GAM_eff2_regen_score_2_cv_2, pages=1)
 # Continuous regen score appears to have strong influence over multifunc in this dataset.
 # Clay content significantly affects multifuc, with non-linear effect.
 # Silt has mildly significant linear affect on multifunc.
+
+# CI
+all_coef <- coef(GAM_eff2_regen_score_2_cv_2)
+all_se <- sqrt(diag(vcov(GAM_eff2_regen_score_2_cv_2)))
+parametric_terms <- names(summary(GAM_eff2_regen_score_2_cv_2)$p.coeff)
+
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
 
 citation("modelr")
 #Normality check
@@ -3030,6 +3149,19 @@ plot(GAM_eff2_regen_conv_2_cv_2, pages=1)
 # Clay content significantly affects multifuc, with non-linear effect.
 # Silt has non-significant linear affect on multifunc.
 
+# CI
+all_coef <- coef(GAM_eff2_regen_conv_2_cv_2)
+all_se <- sqrt(diag(vcov(GAM_eff2_regen_conv_2_cv_2)))
+parametric_terms <- names(summary(GAM_eff2_regen_conv_2_cv_2)$p.coeff)
+
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
 
 #Normality check
 GAM_eff2_regen_conv_2_cv_2_resid <- resid(GAM_eff2_regen_conv_2_cv_2)
@@ -3286,6 +3418,19 @@ plot(GAM_eff2_org_conv_2_cv_2, pages=1)
 # Clay content significantly affects multifuc, with non-linear effect.
 # Silt has non-significant linear affect on multifunc.
 
+# CI
+all_coef <- coef(GAM_eff2_org_conv_2_cv_2)
+all_se <- sqrt(diag(vcov(GAM_eff2_org_conv_2_cv_2)))
+parametric_terms <- names(summary(GAM_eff2_org_conv_2_cv_2)$p.coeff)
+
+confint_df <- data.frame(
+  Term = parametric_terms,
+  Estimate = all_coef[parametric_terms],
+  SE = all_se[parametric_terms],
+  Lower = all_coef[parametric_terms] - 1.96 * all_se[parametric_terms],
+  Upper = all_coef[parametric_terms] + 1.96 * all_se[parametric_terms]
+)
+print(confint_df)
 
 #Normality check
 GAM_eff2_org_conv_2_cv_2_resid <- resid(GAM_eff2_org_conv_2_cv_2)
@@ -4135,5 +4280,116 @@ tab_df(loo_results_df,
 
 ```
 
+
+
+
+Table for raw SH variables associated with regen/conv and organic/conv
+```{r}
+#install.packages("flextable")
+library(flextable)
+#install.packages("officer")
+library(officer)
+
+
+# Helper function to format mean ± SE
+format_mean_se <- function(mean, se) {
+  sprintf("%.2f ± %.2f", mean, se)
+}
+
+# Regenerative classification summary
+regen_summary <- data.farm %>%
+  group_by(Score.Result) %>%
+  summarise(
+    mean_SOC = mean(SOC_3000_mean, na.rm = TRUE),
+    se_SOC = sd(SOC_3000_mean, na.rm = TRUE) / sqrt(n()),
+    mean_biomass = mean(microbial_biomass_mean, na.rm = TRUE),
+    se_biomass = sd(microbial_biomass_mean, na.rm = TRUE) / sqrt(n()),
+    mean_bd = mean(bulk_density_mean, na.rm = TRUE),
+    se_bd = sd(bulk_density_mean, na.rm = TRUE) / sqrt(n())
+  ) %>%
+  mutate(
+    SOC = format_mean_se(mean_SOC, se_SOC),
+    Biomass = format_mean_se(mean_biomass, se_biomass),
+    Bulk_Density = format_mean_se(mean_bd, se_bd)
+  ) %>%
+  select(Score.Result, SOC, Biomass, Bulk_Density) %>%
+  pivot_longer(-Score.Result, names_to = "Metric", values_to = "value") %>%
+  pivot_wider(names_from = Score.Result, values_from = value)
+
+# Organic classification summary
+org_summary <- data.farm %>%
+  group_by(organic_cert) %>%
+  summarise(
+    mean_SOC = mean(SOC_3000_mean, na.rm = TRUE),
+    se_SOC = sd(SOC_3000_mean, na.rm = TRUE) / sqrt(n()),
+    mean_biomass = mean(microbial_biomass_mean, na.rm = TRUE),
+    se_biomass = sd(microbial_biomass_mean, na.rm = TRUE) / sqrt(n()),
+    mean_bd = mean(bulk_density_mean, na.rm = TRUE),
+    se_bd = sd(bulk_density_mean, na.rm = TRUE) / sqrt(n())
+  ) %>%
+  mutate(
+    SOC = format_mean_se(mean_SOC, se_SOC),
+    Biomass = format_mean_se(mean_biomass, se_biomass),
+    Bulk_Density = format_mean_se(mean_bd, se_bd)
+  ) %>%
+  select(organic_cert, SOC, Biomass, Bulk_Density) %>%
+  pivot_longer(-organic_cert, names_to = "Metric", values_to = "value") %>%
+  pivot_wider(names_from = organic_cert, values_from = value)
+
+# Combine and rename
+final_table <- regen_summary %>%
+  full_join(org_summary, by = "Metric") %>%
+  select(Metric, Regenerative, Conventional, ORG, CONV) %>%
+  rename(
+    `Organic` = ORG,
+    `Conventional (Organic)` = CONV,
+    `Conventional (Regen)` = Conventional
+  )%>%
+  mutate(Metric = case_when(
+    Metric == "SOC" ~ "Soil Organic Carbon (Mg ha⁻¹)",
+    Metric == "Biomass" ~ "Microbial Biomass (ng g⁻¹)",
+    Metric == "Bulk_Density" ~ "Bulk Density (g cm⁻³)",
+    TRUE ~ Metric
+  ))
+
+ft <- flextable(final_table) %>%
+  set_header_labels(
+    Metric = "Metric",
+    Regenerative = "Regenerative",
+    `Conventional (Regen)` = "Conventional",
+    Organic = "Organic",
+    `Conventional (Organic)` = "Conventional"
+  ) %>%
+  add_header_row(
+    values = c("", "Regenerative Classification", "Organic Classification"),
+    colwidths = c(1, 2, 2)
+  ) %>%
+  font(fontname = "Times", part = "all") %>%                   # serif font
+  fontsize(size = 10, part = "all") %>%                        # base size
+  color(color = "black", part = "all") %>%                     # text color
+  bg(bg = "white", part = "all") %>%                           # background color
+  border_remove() %>%                                          # remove default borders
+  border_outer(border = fp_border(color = "black", width = 1)) %>%  # outer border
+  border_inner(border = fp_border(color = "black", width = 0.5)) %>%# inner grid
+  bold(part = "header") %>%                                    # bold column headers
+  bold(i = NULL, j = 1, part = "body", bold = TRUE) %>%        # bold first column (metrics)
+  padding(padding = 4, part = "all") %>%                       
+  autofit()
+
+ft
+ft <- ft %>%
+  align(j = 2:5, align = "center", part = "all")  # columns 2 to 5 (adjust if needed)
+ft
+
+#install.packages("webshot2")
+library(webshot2)
+
+# Save flextable as HTML then image
+save_as_image(ft, path = "results_table_alt_style.png", zoom = 2)
+
+
+
+
+```
 
 
